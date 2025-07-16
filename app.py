@@ -128,7 +128,7 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat() + "Z",
-        "service": "YARS Reddit Scraper"
+        "service": "RedditExtractor API"
     })
 
 @app.route('/test-proxy')
@@ -188,7 +188,7 @@ def api_documentation():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>YARS Reddit Scraper API Documentation</title>
+        <title>RedditExtractor API Documentation</title>
         <style>
             body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
             .header { background: #FF4500; color: white; padding: 20px; border-radius: 5px; margin-bottom: 20px; }
@@ -214,8 +214,8 @@ def api_documentation():
     </head>
     <body>
         <div class="header">
-            <h1>🔍 YARS Reddit Scraper API</h1>
-            <p>Professional Reddit scraping API with proxy support and n8n compatibility</p>
+            <h1>🔍 RedditExtractor API</h1>
+            <p>A professional, proxy-enabled Reddit scraping API designed for the modern automation stack</p>
         </div>
         
         <div class="toc">
@@ -232,15 +232,17 @@ def api_documentation():
         
         <section id="overview">
             <h2>📖 Overview</h2>
-            <p>YARS is a professional Reddit scraping API that provides structured access to Reddit content with proxy support and comprehensive parameter control. Perfect for automation workflows and data collection.</p>
+            <p>RedditExtractor is a powerful, production-ready API for scraping Reddit. It comes with full proxy support, a flexible API for fetching posts, comments, and user data, and is designed for seamless integration with n8n, Zapier, or any custom workflow.</p>
+            
+            <p><strong>This is the first tool in the Extractor Suite</strong> - a series of professional scraping APIs designed for the modern automation stack.</p>
             
             <h3>✨ Features</h3>
             <ul>
-                <li>🔄 Proxy support with DataImpulse integration</li>
+                <li>🔄 Proxy support for production use</li>
                 <li>🎯 URL-based and search-based scraping</li>
                 <li>📊 Structured JSON responses</li>
                 <li>🔧 Comprehensive parameter control</li>
-                <li>⚡ n8n and automation-friendly</li>
+                <li>⚡ Perfect for n8n, Zapier, and custom workflows</li>
                 <li>📈 Built-in error handling and logging</li>
             </ul>
         </section>
@@ -394,8 +396,8 @@ Content-Type: application/json
         </section>
         
         <section id="n8n">
-            <h2>🔗 n8n Integration</h2>
-            <p>YARS is designed to work seamlessly with n8n workflows:</p>
+            <h2>🔗 Automation Integration</h2>
+            <p>RedditExtractor is designed to work seamlessly with automation platforms:</p>
             
             <div class="example">
                 <strong>n8n HTTP Request Node Configuration:</strong>
@@ -412,7 +414,22 @@ Body:
                 </pre>
             </div>
             
-            <p>The structured response format makes it easy to process results in subsequent n8n nodes.</p>
+            <div class="example">
+                <strong>Zapier Webhook Configuration:</strong>
+                <pre>
+Method: POST
+URL: https://your-app.railway.app/api/scrape
+Headers: Content-Type: application/json
+Data: 
+{
+  "searchTerm": "{{inputData.query}}",
+  "maxItems": 50,
+  "sortSearch": "relevance"
+}
+                </pre>
+            </div>
+            
+            <p>The structured response format makes it easy to process results in subsequent workflow nodes.</p>
         </section>
         
         <section id="errors">
@@ -469,7 +486,8 @@ Body:
         </section>
         
         <footer style="margin-top: 50px; text-align: center; color: #666;">
-            <p>🚀 YARS Reddit Scraper API - Built for Railway Template Marketplace</p>
+            <p>🚀 RedditExtractor - Part of the Extractor Suite</p>
+            <p>Built with ❤️ for the modern automation stack</p>
         </footer>
     </body>
     </html>

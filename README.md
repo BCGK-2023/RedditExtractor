@@ -1,10 +1,16 @@
-# 🔍 YARS - Yet Another Reddit Scraper
+# 🔍 RedditExtractor
 
-**Professional Reddit Scraping API with Proxy Support & n8n Integration**
+**A professional, proxy-enabled Reddit scraping API. Deploy to Railway in one click.**
 
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/your-template-id)
 
 ---
+
+## 🎯 About RedditExtractor
+
+RedditExtractor is a powerful, production-ready API for scraping Reddit. It comes with full proxy support, a flexible API for fetching posts, comments, and user data, and is designed for seamless integration with n8n, Zapier, or any custom workflow.
+
+**This is the first tool in the Extractor Suite** - a series of professional scraping APIs designed for the modern automation stack.
 
 ## 🚀 Quick Start
 
@@ -21,10 +27,10 @@
 ## 📋 Features
 
 - 🎯 **URL-based & Search-based Scraping** - Scrape specific subreddits, users, or search across Reddit
-- 🔄 **Proxy Support** - Built-in DataImpulse proxy integration for production use
+- 🔄 **Proxy Support** - Built-in proxy integration for production use
 - 📊 **Structured JSON Responses** - Clean, consistent API responses
 - 🔧 **25+ Parameters** - Comprehensive control over scraping behavior
-- ⚡ **n8n Ready** - Perfect for automation workflows
+- ⚡ **Automation Ready** - Perfect for n8n, Zapier, and custom workflows
 - 📈 **Built-in Documentation** - Interactive docs at `/docs`
 - 🚨 **Error Handling** - Proper error codes and detailed responses
 - 🛡️ **Input Validation** - Comprehensive parameter validation
@@ -142,11 +148,11 @@ GET /docs           # Interactive documentation
 }
 ```
 
-## 🔗 n8n Integration
+## 🔗 Automation Integration
 
-YARS is designed for seamless n8n integration:
+RedditExtractor is designed for seamless integration with automation platforms:
 
-### HTTP Request Node Configuration
+### n8n HTTP Request Node
 ```javascript
 Method: POST
 URL: https://your-app.railway.app/api/scrape
@@ -158,7 +164,19 @@ Body: {
 }
 ```
 
-The structured response format makes it easy to process results in subsequent n8n nodes.
+### Zapier Webhooks
+```javascript
+URL: https://your-app.railway.app/api/scrape
+Method: POST
+Headers: Content-Type: application/json
+Data: {
+  "searchTerm": "{{inputData.query}}",
+  "maxItems": 50,
+  "sortSearch": "relevance"
+}
+```
+
+The structured response format makes it easy to process results in subsequent workflow nodes.
 
 ## 🛠️ Local Development
 
@@ -168,16 +186,16 @@ The structured response format makes it easy to process results in subsequent n8
 
 ### Installation
 ```bash
-git clone https://github.com/your-username/yars-railway.git
-cd yars-railway
+git clone https://github.com/your-username/reddit-extractor.git
+cd reddit-extractor
 pip install -r requirements.txt
 ```
 
 ### Environment Variables
 ```env
 # Optional: Proxy configuration
-PROXY_HOST=gw.dataimpulse.com
-PROXY_PORT=823
+PROXY_HOST=your-proxy-host
+PROXY_PORT=your-proxy-port
 PROXY_USERNAME=your-username
 PROXY_PASSWORD=your-password
 
@@ -206,7 +224,7 @@ API will be available at `http://localhost:8000`
 ## 📁 Project Structure
 
 ```
-yars-railway/
+reddit-extractor/
 ├── app.py                 # Main Flask application
 ├── requirements.txt       # Python dependencies
 ├── Procfile              # Railway deployment config
@@ -244,8 +262,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## 🆘 Support
 
 - 📖 **Documentation**: Visit `/docs` on your deployed instance
-- 🐛 **Issues**: [GitHub Issues](https://github.com/your-username/yars-railway/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/your-username/yars-railway/discussions)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/your-username/reddit-extractor/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/your-username/reddit-extractor/discussions)
 
 ## 🚀 Deploy to Railway
 
@@ -253,4 +271,10 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-**Built with ❤️ for the Reddit scraping community**
+## 🙏 Acknowledgements
+
+RedditExtractor builds upon the solid foundation of the open-source project **YARS (Yet Another Reddit Scraper)**. We've heavily modified and enhanced it to create a professional, deployable API product.
+
+---
+
+**Built with ❤️ for the modern automation stack**
