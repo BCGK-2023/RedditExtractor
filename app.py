@@ -7,6 +7,8 @@ import requests
 
 from yars import YARS
 from validator import YARSValidator, ValidationError
+from validator_v2 import RedditExtractorValidator, ValidationWarning
+from input_processor import SmartInputProcessor
 from jobs import get_job_manager
 from webhooks import get_webhook_delivery
 from background_worker import start_background_worker
@@ -20,6 +22,213 @@ start_background_worker()
 # Get global instances
 job_manager = get_job_manager()
 webhook_delivery = get_webhook_delivery()
+
+@app.route('/api/v2/scrape', methods=['POST'])
+def scrape_reddit_v2():
+    """Enhanced scraping endpoint with new nested parameter structure and smart input processing"""
+    start_time = time.time()
+    
+    try:
+        # Get request parameters
+        params = request.get_json() or {}
+        
+        # Validate using new v2 validator
+        try:
+            validated_params, warnings = RedditExtractorValidator.validate_request(params)
+        except ValidationError as e:
+            # Enhanced error response is already created in the validator
+            if hasattr(e, 'details') and isinstance(e.details, dict):
+                return jsonify(e.details), 400
+            else:
+                # Fallback for simple errors
+                return jsonify(RedditExtractorValidator.create_error_response([
+                    {"code": e.code, "message": e.message, "details": str(e.details) if e.details else ""}
+                ], request_context=params)), 400
+        
+        # Process input sources using smart processor
+        input_sources = validated_params['input']['sources']
+        content_limits = validated_params['content']['limits']
+        
+        processed_sources, strategy = SmartInputProcessor.process_sources(input_sources, content_limits)
+        
+        # Check delivery mode
+        delivery_mode = validated_params['output']['delivery']['mode']
+        webhook_url = validated_params['output']['delivery'].get('webhookUrl')
+        
+        if delivery_mode == 'async':
+            # Create processing report for user
+            processing_report = SmartInputProcessor.create_processing_report(processed_sources, strategy)
+            
+            # Create async job with v2 parameters
+            job_id = job_manager.create_job(validated_params, webhook_url)
+            
+            return jsonify({
+                "jobId": job_id,
+                "status": "pending",
+                "message": "Job created successfully. Results will be sent to your webhook URL when complete.",
+                "processingReport": processing_report,
+                "webhookUrl": webhook_url,
+                "statusUrl": f"/api/jobs/{job_id}",
+                "estimatedDuration": f"{strategy['total_estimated_time']:.1f}s",
+                "createdAt": datetime.utcnow().isoformat() + "Z",
+                "warnings": [{"code": w.code, "message": w.message, "suggestion": w.suggestion} for w in warnings]
+            }), 202
+        
+        else:
+            # Synchronous processing with smart input handling
+            results = {"posts": [], "comments": [], "users": [], "communities": []}
+            
+            # Process each source according to strategy
+            miner = YARS()
+            content_include = validated_params['content']['include']
+            
+            for source in processed_sources:
+                allocated_items = strategy['distribution'].get(source.original, 0)
+                if allocated_items == 0:
+                    continue
+                
+                try:
+                    if source.type.value == 'search_term':
+                        # Handle search term
+                        search_results = miner.search_reddit_global(
+                            source.normalized,
+                            limit=allocated_items,
+                            sort=validated_params['input']['filters'].get('sortBy', 'relevance'),
+                            time_filter=validated_params['input']['filters'].get('timeframe', 'all')
+                        )
+                        
+                        if 'posts' in content_include:
+                            results['posts'].extend(search_results[:allocated_items])
+                        
+                    else:
+                        # Handle URL-based source
+                        source_results = miner.scrape_by_urls([source.reddit_url], {
+                            'maxItems': allocated_items,
+                            'searchForPosts': 'posts' in content_include,
+                            'searchForComments': 'comments' in content_include,
+                            'searchForUsers': 'users' in content_include,
+                            'searchForCommunities': 'communities' in content_include,
+                            'sortSearch': validated_params['input']['filters'].get('sortBy', 'hot'),
+                            'filterByDate': validated_params['input']['filters'].get('timeframe', 'all'),
+                            'includeNSFW': validated_params['input']['filters'].get('includeNSFW', False)
+                        })
+                        
+                        # Merge results
+                        for content_type in ['posts', 'comments', 'users', 'communities']:
+                            if content_type in content_include and content_type in source_results:
+                                results[content_type].extend(source_results[content_type])
+                
+                except Exception as source_error:
+                    # Log source error but continue with other sources
+                    print(f"Error processing source {source.original}: {source_error}")
+                    continue
+            
+            # Apply global filters
+            if not validated_params['input']['filters'].get('includeNSFW', False):
+                results['posts'] = [post for post in results['posts'] if not post.get('over_18', False)]
+            
+            # Apply total items limit
+            total_limit = validated_params['content']['limits'].get('totalItems', 100)
+            current_total = sum(len(results[key]) for key in results)
+            
+            if current_total > total_limit:
+                # Trim results proportionally
+                scale_factor = total_limit / current_total
+                for key in results:
+                    if results[key]:
+                        new_length = max(1, int(len(results[key]) * scale_factor))
+                        results[key] = results[key][:new_length]
+            
+            # Calculate execution time
+            execution_time = time.time() - start_time
+            
+            # Handle output format
+            output_format = validated_params['output']['format']
+            
+            if output_format == 'json':
+                response = RedditExtractorValidator.create_success_response(
+                    results, validated_params, execution_time, warnings
+                )
+                # Add processing report to metadata
+                response['metadata']['processingReport'] = SmartInputProcessor.create_processing_report(processed_sources, strategy)
+                return jsonify(response)
+            else:
+                # Format data according to requested format
+                try:
+                    response_data = RedditExtractorValidator.create_success_response(
+                        results, validated_params, execution_time, warnings
+                    )
+                    
+                    formatted_data = OutputFormatter.format_data(
+                        results, 
+                        output_format, 
+                        response_data.get('metadata', {})
+                    )
+                    
+                    content_type = OutputFormatter.get_content_type(output_format)
+                    file_extension = OutputFormatter.get_file_extension(output_format)
+                    
+                    # Create filename
+                    search_terms = [s.normalized for s in processed_sources if s.type.value == 'search_term']
+                    if search_terms:
+                        filename = f"reddit-search-{search_terms[0][:20]}.{file_extension}"
+                    else:
+                        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                        filename = f"reddit-data-{timestamp}.{file_extension}"
+                    
+                    # Sanitize filename
+                    filename = "".join(c for c in filename if c.isalnum() or c in ".-_")
+                    
+                    return Response(
+                        formatted_data,
+                        mimetype=content_type,
+                        headers={
+                            "Content-Disposition": f"attachment; filename={filename}",
+                            "Content-Type": content_type
+                        }
+                    )
+                except Exception as format_error:
+                    return jsonify(RedditExtractorValidator.create_error_response([
+                        {
+                            "code": "FORMAT_ERROR",
+                            "message": f"Failed to format data as {output_format}",
+                            "details": "Falling back to JSON format"
+                        }
+                    ], warnings)), 500
+        
+    except Exception as e:
+        # Handle unexpected errors
+        execution_time = time.time() - start_time
+        error_code = "UNKNOWN_ERROR"
+        user_message = "An unexpected error occurred while processing your request"
+        actionable_details = "Please try again or contact support if the issue persists"
+        
+        # Enhanced error detection
+        error_str = str(e).lower()
+        if "proxy" in error_str or "connection" in error_str:
+            error_code = "PROXY_ERROR"
+            user_message = "Proxy connection failed"
+            actionable_details = "Check your proxy configuration and network connectivity"
+        elif "timeout" in error_str:
+            error_code = "TIMEOUT"
+            user_message = "Request timed out"
+            actionable_details = "Try reducing totalItems or using async delivery mode"
+        elif "reddit" in error_str and ("block" in error_str or "forbidden" in error_str):
+            error_code = "REDDIT_BLOCKED"
+            user_message = "Reddit blocked the request"
+            actionable_details = "Use a proxy or wait before retrying"
+        elif "rate" in error_str and "limit" in error_str:
+            error_code = "RATE_LIMITED"
+            user_message = "Rate limit exceeded"
+            actionable_details = "Wait a few minutes before making another request"
+        
+        return jsonify(RedditExtractorValidator.create_error_response([
+            {
+                "code": error_code,
+                "message": user_message,
+                "details": actionable_details
+            }
+        ])), 500
 
 @app.route('/api/scrape', methods=['POST'])
 def scrape_reddit():
@@ -262,6 +471,79 @@ def list_jobs():
         "count": len(simplified_jobs),
         "summary": job_manager.get_jobs_summary()
     })
+
+@app.route('/api/compare', methods=['POST'])
+def compare_api_formats():
+    """Compare v1 (legacy) and v2 (new) API formats and show migration path"""
+    try:
+        params = request.get_json() or {}
+        
+        # Detect format
+        is_legacy = RedditExtractorValidator._is_legacy_format(params)
+        
+        if is_legacy:
+            # Convert legacy to new format and show comparison
+            original_params = params.copy()
+            converted_params = RedditExtractorValidator._convert_legacy_to_new(params)
+            
+            # Process with smart input processor
+            input_sources = converted_params['input']['sources']
+            content_limits = converted_params['content']['limits']
+            processed_sources, strategy = SmartInputProcessor.process_sources(input_sources, content_limits)
+            
+            return jsonify({
+                "detectedFormat": "v1 (legacy)",
+                "original": original_params,
+                "converted": converted_params,
+                "processingAnalysis": SmartInputProcessor.create_processing_report(processed_sources, strategy),
+                "migrationNotes": [
+                    "Your request uses the legacy flat parameter structure",
+                    "Consider migrating to v2 nested structure for better clarity",
+                    "Use /api/v2/scrape endpoint for the new format",
+                    "The new format provides better parameter organization and smart input processing"
+                ],
+                "benefits": [
+                    "Mixed URL and search term sources in single request",
+                    "Clear parameter grouping (input, content, output)",
+                    "Smart distribution across multiple sources", 
+                    "Better validation warnings and suggestions",
+                    "Processing time estimates and source analysis"
+                ]
+            })
+        else:
+            # Validate new format and show analysis
+            validated_params, warnings = RedditExtractorValidator.validate_request(params)
+            input_sources = validated_params['input']['sources']
+            content_limits = validated_params['content']['limits']
+            processed_sources, strategy = SmartInputProcessor.process_sources(input_sources, content_limits)
+            
+            return jsonify({
+                "detectedFormat": "v2 (new)",
+                "validated": validated_params,
+                "warnings": [{"code": w.code, "message": w.message, "suggestion": w.suggestion} for w in warnings],
+                "processingAnalysis": SmartInputProcessor.create_processing_report(processed_sources, strategy),
+                "optimizations": [
+                    f"Estimated processing time: {strategy['total_estimated_time']:.1f}s",
+                    f"Sources will be processed in order: {strategy['processing_order']}",
+                    f"Mixed mode enabled: {strategy['mixed_mode']}",
+                    f"Item distribution: {strategy['distribution']}"
+                ]
+            })
+    
+    except ValidationError as e:
+        return jsonify({
+            "error": "VALIDATION_FAILED",
+            "message": "Could not process request parameters",
+            "details": e.details if hasattr(e, 'details') else str(e),
+            "suggestion": "Check parameter format and try again"
+        }), 400
+    
+    except Exception as e:
+        return jsonify({
+            "error": "COMPARISON_FAILED", 
+            "message": "Could not compare API formats",
+            "details": str(e)
+        }), 500
 
 @app.route('/api/webhook/test', methods=['POST'])
 def test_webhook():

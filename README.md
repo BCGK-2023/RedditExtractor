@@ -28,11 +28,13 @@ RedditExtractor is a powerful, production-ready API for scraping Reddit. It come
 
 - 🎯 **URL-based & Search-based Scraping** - Scrape specific subreddits, users, or search across Reddit
 - 🔄 **Proxy Support** - Built-in proxy integration for production use
-- 📊 **Structured JSON Responses** - Clean, consistent API responses
+- 📊 **Multiple Output Formats** - JSON, CSV, RSS, XML for different use cases
+- 🔄 **Asynchronous Processing** - Background jobs with webhook delivery for large datasets
+- 📈 **Job Queue & Progress Tracking** - Monitor long-running scraping operations
 - 🔧 **25+ Parameters** - Comprehensive control over scraping behavior
 - ⚡ **Automation Ready** - Perfect for n8n, Zapier, and custom workflows
-- 📈 **Built-in Documentation** - Interactive docs at `/docs`
-- 🚨 **Error Handling** - Proper error codes and detailed responses
+- 📚 **Built-in Documentation** - Interactive docs at `/docs`
+- 🚨 **Professional Error Handling** - Proper error codes and actionable responses
 - 🛡️ **Input Validation** - Comprehensive parameter validation
 
 ## 🔌 API Endpoints
@@ -41,6 +43,13 @@ RedditExtractor is a powerful, production-ready API for scraping Reddit. It come
 ```http
 POST /api/scrape
 Content-Type: application/json
+```
+
+### Async Job Management
+```http
+GET /api/jobs/{jobId}     # Get job status and results
+GET /api/jobs            # List recent jobs (with optional ?status= filter)
+POST /api/webhook/test   # Test webhook URL connectivity
 ```
 
 ### Health & Status
@@ -84,27 +93,222 @@ GET /docs           # Interactive documentation
 }
 ```
 
-## 📖 Complete Parameter Reference
+## 📖 Complete JSON Body Parameter Guide
 
-### Input Sources (Choose One)
-- **`startUrls`** - Array of Reddit URLs to scrape
-- **`searchTerm`** - Search query for Reddit-wide search
+### 📍 **Input Sources** (Choose One - Required)
 
-### Content Control
-- **`searchForPosts`** - Include posts (default: true)
-- **`searchForComments`** - Include comments (default: true)
-- **`skipComments`** - Skip comment scraping for performance
-- **`includeNSFW`** - Include NSFW content (default: false)
+#### `startUrls` (Array of Strings)
+```json
+{
+  "startUrls": [
+    "https://reddit.com/r/python",
+    "https://reddit.com/user/someuser",
+    "https://reddit.com/r/programming/comments/abc123/some_post"
+  ]
+}
+```
+**What it does**: Scrapes content from specific Reddit URLs  
+**Use cases**: Target specific subreddits, users, or individual posts  
+**Supported URL types**:
+- Subreddits: `https://reddit.com/r/subreddit_name`
+- Users: `https://reddit.com/user/username` 
+- Posts: `https://reddit.com/r/subreddit/comments/post_id/title`
+- Old Reddit URLs are also supported
 
-### Sorting & Filtering
-- **`sortSearch`** - Sort order: "hot", "new", "top", "rising", "relevance"
-- **`filterByDate`** - Time filter: "hour", "day", "week", "month", "year", "all"
-- **`postDateLimit`** - ISO date string to filter posts after date
+#### `searchTerm` (String)
+```json
+{
+  "searchTerm": "machine learning python"
+}
+```
+**What it does**: Searches across all of Reddit for posts containing your search term  
+**Use cases**: Find content about specific topics across multiple subreddits  
+**Tips**: Use quotes for exact phrases, combine keywords for better results
 
-### Limits & Pagination
-- **`maxItems`** - Maximum items to return (1-10000)
-- **`postsPerPage`** - Posts per page (1-100)
-- **`commentsPerPage`** - Comments per page (1-100)
+---
+
+### 🎯 **Content Control** (What to Scrape)
+
+#### `searchForPosts` (Boolean, default: true)
+```json
+{
+  "searchForPosts": true
+}
+```
+**What it does**: Includes Reddit posts in the results  
+**Use cases**: Turn off when you only want comments or user data
+
+#### `searchForComments` (Boolean, default: true) 
+```json
+{
+  "searchForComments": false
+}
+```
+**What it does**: Includes comments from posts in the results  
+**Use cases**: Turn off for faster scraping when you only need post data
+
+#### `skipComments` (Boolean, default: false)
+```json
+{
+  "skipComments": true
+}
+```
+**What it does**: Completely skips comment scraping for better performance  
+**Use cases**: When speed is more important than getting comment data
+
+#### `includeNSFW` (Boolean, default: false)
+```json
+{
+  "includeNSFW": true
+}
+```
+**What it does**: Includes NSFW (Not Safe For Work) content in results  
+**Use cases**: Research purposes, content moderation analysis
+
+---
+
+### 🔄 **Sorting & Filtering** (How to Order Results)
+
+#### `sortSearch` (String, default: "hot")
+```json
+{
+  "sortSearch": "top"
+}
+```
+**What it does**: Controls how posts are sorted  
+**Options**:
+- `"hot"` - Reddit's "hot" algorithm (trending content)
+- `"new"` - Newest posts first
+- `"top"` - Highest scoring posts
+- `"rising"` - Posts gaining momentum
+- `"relevance"` - Most relevant to search term (for searches)
+
+#### `filterByDate` (String, default: "all")
+```json
+{
+  "filterByDate": "week"
+}
+```
+**What it does**: Filters posts by time period  
+**Options**: `"hour"`, `"day"`, `"week"`, `"month"`, `"year"`, `"all"`  
+**Use cases**: Get recent content only, analyze trends over time
+
+#### `postDateLimit` (ISO Date String, optional)
+```json
+{
+  "postDateLimit": "2024-01-01T00:00:00Z"
+}
+```
+**What it does**: Only include posts created after this date  
+**Formats**: `"2024-01-01"` or `"2024-01-01T00:00:00Z"`  
+**Use cases**: Incremental scraping, date range analysis
+
+---
+
+### 📊 **Output & Delivery**
+
+#### `outputFormat` (String, default: "json")
+```json
+{
+  "outputFormat": "csv"
+}
+```
+**What it does**: Controls the format of returned data  
+**Options**:
+- `"json"` - Standard JSON response (default)
+- `"csv"` - Downloadable CSV file for spreadsheet analysis
+- `"rss"` - RSS feed for content syndication
+- `"xml"` - XML format for legacy system integration
+
+#### `webhookUrl` (String, optional)
+```json
+{
+  "webhookUrl": "https://your-webhook.com/reddit-results"
+}
+```
+**What it does**: Enables asynchronous processing - results sent to your webhook  
+**Use cases**: Large scraping jobs, background processing, automation workflows  
+**Note**: When provided, API returns job ID immediately instead of waiting
+
+---
+
+### 🔢 **Limits & Pagination** (How Much Data)
+
+#### `maxItems` (Integer, default: 100, max: 10000)
+```json
+{
+  "maxItems": 500
+}
+```
+**What it does**: Maximum total items to return across all content types  
+**Use cases**: Control response size, manage processing time
+
+#### `postsPerPage` (Integer, default: 25, max: 100)
+```json
+{
+  "postsPerPage": 50
+}
+```
+**What it does**: How many posts to fetch per page during pagination  
+**Use cases**: Performance tuning, memory management
+
+#### `commentsPerPage` (Integer, default: 20, max: 100)
+```json
+{
+  "commentsPerPage": 30
+}
+```
+**What it does**: How many comments to fetch per post  
+**Use cases**: Control comment depth, manage response size
+
+---
+
+### 📋 **Complete Example Requests**
+
+#### Simple Subreddit Scraping
+```json
+{
+  "startUrls": ["https://reddit.com/r/python"],
+  "maxItems": 100,
+  "sortSearch": "hot"
+}
+```
+
+#### Advanced Search with Filtering
+```json
+{
+  "searchTerm": "artificial intelligence",
+  "searchForPosts": true,
+  "searchForComments": false,
+  "sortSearch": "relevance",
+  "filterByDate": "month",
+  "maxItems": 200,
+  "includeNSFW": false
+}
+```
+
+#### Async Processing with CSV Export
+```json
+{
+  "searchTerm": "data science jobs",
+  "maxItems": 1000,
+  "outputFormat": "csv",
+  "webhookUrl": "https://your-webhook.com/results",
+  "sortSearch": "new",
+  "filterByDate": "week"
+}
+```
+
+#### User Analysis
+```json
+{
+  "startUrls": ["https://reddit.com/user/someuser"],
+  "searchForPosts": true,
+  "skipComments": true,
+  "maxItems": 500,
+  "sortSearch": "new"
+}
+```
 
 ## 📊 Response Format
 
@@ -230,6 +434,10 @@ reddit-extractor/
 ├── Procfile              # Railway deployment config
 ├── yars.py               # Core scraping logic
 ├── validator.py          # Parameter validation
+├── formatters.py         # Output format handlers (JSON, CSV, RSS, XML)
+├── jobs.py               # Job queue management
+├── webhooks.py           # Webhook delivery system
+├── background_worker.py  # Async job processing
 ├── url_parser.py         # URL parsing utilities
 ├── sessions.py           # Session management
 ├── agents.py             # User agent management
