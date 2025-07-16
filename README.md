@@ -1,172 +1,255 @@
-<div align="center">
-  
-<img src="logo.svg" width="10%">
+# 🔍 YARS - Yet Another Reddit Scraper
 
-# YARS (Yet Another Reddit Scraper)
+**Professional Reddit Scraping API with Proxy Support & n8n Integration**
 
-[![GitHub stars](https://img.shields.io/github/stars/datavorous/yars.svg?style=social&label=Stars&style=plastic)](https://github.com/datavorous/yars/stargazers)<br>
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/your-template-id)
 
-</div>
+---
 
-YARS is a Python package designed to simplify the process of scraping Reddit for posts, comments, user data, and other media. The package also includes utility functions. It is built using **Python** and relies on the **requests** module for fetching data from Reddit’s public API. The scraper uses simple `.json` requests, avoiding the need for official Reddit API keys, making it lightweight and easy to use.
+## 🚀 Quick Start
 
-## Features
-
-- **Reddit Search**: Search Reddit for posts using a keyword query.
-- **Post Scraping**: Scrape post details, including title, body, and comments.
-- **User Data Scraping**: Fetch recent activity (posts and comments) of a Reddit user.
-- **Subreddit Posts Fetching**: Retrieve posts from specific subreddits with flexible options for category and time filters.
-- **Image Downloading**: Download images from posts.
-- **Results Display**: Utilize `Pygments` for colorful display of JSON-formatted results.
-
-> [!WARNING]
-> Use with rotating proxies, or Reddit might gift you with an IP ban.  
-> I could extract max 2552 posts at once from 'r/all' using this.  
-> [Here](https://files.catbox.moe/zdra2i.json) is a **7.1 MB JSON** file containing the top 100 posts from 'r/nosleep', which included post titles, body text, all comments and their replies, post scores, time of upload etc.
-
-## Dependencies
-
-- `requests`
-- `Pygments`
-
-## Installation
-
-1. Clone the repository:
-
+1. **Deploy to Railway** - Click the button above
+2. **Set Environment Variables** (optional - for proxy support):
+   ```env
+   PROXY_HOST=your-proxy-host
+   PROXY_PORT=your-proxy-port
+   PROXY_USERNAME=your-username
+   PROXY_PASSWORD=your-password
    ```
-   git clone https://github.com/datavorous/YARS.git
-   ```
-   Navigate inside the ```src``` folder.
+3. **Start Scraping** - Your API is ready at `https://your-app.railway.app`
 
-2. Install ```uv``` (if not already installed):
+## 📋 Features
 
-   ```
-   pip install uv
-   ```
+- 🎯 **URL-based & Search-based Scraping** - Scrape specific subreddits, users, or search across Reddit
+- 🔄 **Proxy Support** - Built-in DataImpulse proxy integration for production use
+- 📊 **Structured JSON Responses** - Clean, consistent API responses
+- 🔧 **25+ Parameters** - Comprehensive control over scraping behavior
+- ⚡ **n8n Ready** - Perfect for automation workflows
+- 📈 **Built-in Documentation** - Interactive docs at `/docs`
+- 🚨 **Error Handling** - Proper error codes and detailed responses
+- 🛡️ **Input Validation** - Comprehensive parameter validation
 
-3. Run the application:
-   ```
-   uv run example/example.py
-   ```
-   It'll setup the virtual env, install the necessary packages and run the ```example.py``` program.
+## 🔌 API Endpoints
 
-## Usage
-
-We will use the following Python script to demonstrate the functionality of the scraper. The script includes:
-
-- Searching Reddit
-- Scraping post details
-- Fetching user data
-- Retrieving subreddit posts
-- Downloading images from posts
-
-#### Code Overview
-
-```python
-from yars import YARS
-from utils import display_results, download_image
-
-miner = YARS()
+### Main Scraping Endpoint
+```http
+POST /api/scrape
+Content-Type: application/json
 ```
 
-#### Step 1: Searching Reddit
-
-The `search_reddit` method allows you to search Reddit using a query string. Here, we search for posts containing "OpenAI" and limit the results to 3 posts. The `display_results` function is used to present the results in a formatted way.
-
-```python
-search_results = miner.search_reddit("OpenAI", limit=3)
-display_results(search_results, "SEARCH")
+### Health & Status
+```http
+GET /health          # API health check
+GET /test-proxy      # Proxy connectivity test
+GET /docs           # Interactive documentation
 ```
 
-#### Step 2: Scraping Post Details
+## 💡 Usage Examples
 
-Next, we scrape details of a specific Reddit post by passing its permalink. If the post details are successfully retrieved, they are displayed using `display_results`. Otherwise, an error message is printed.
-
-```python
-permalink = "https://www.reddit.com/r/getdisciplined/comments/1frb5ib/what_single_health_test_or_practice_has/".split('reddit.com')[1]
-post_details = miner.scrape_post_details(permalink)
-if post_details:
-    display_results(post_details, "POST DATA")
-else:
-    print("Failed to scrape post details.")
+### 1. Scrape Subreddit Posts
+```json
+{
+  "startUrls": ["https://reddit.com/r/python"],
+  "searchForPosts": true,
+  "maxItems": 50,
+  "sortSearch": "hot",
+  "filterByDate": "week"
+}
 ```
 
-#### Step 3: Fetching User Data
-
-We can also retrieve a Reddit user’s recent activity (posts and comments) using the `scrape_user_data` method. Here, we fetch data for the user `iamsecb` and limit the results to 2 items.
-
-```python
-user_data = miner.scrape_user_data("iamsecb", limit=2)
-display_results(user_data, "USER DATA")
+### 2. Search Across Reddit
+```json
+{
+  "searchTerm": "machine learning",
+  "searchForPosts": true,
+  "sortSearch": "relevance",
+  "filterByDate": "month",
+  "maxItems": 200
+}
 ```
 
-#### Step 4: Fetching Subreddit Posts
-
-The `fetch_subreddit_posts` method retrieves posts from a specified subreddit. In this example, we fetch 11 top posts from the "generative" subreddit from the past week.
-
-```python
-subreddit_posts = miner.fetch_subreddit_posts("generative", limit=11, category="top", time_filter="week")
-display_results(subreddit_posts, "EarthPorn SUBREDDIT New Posts")
+### 3. User-Specific Scraping
+```json
+{
+  "startUrls": ["https://reddit.com/user/someuser"],
+  "searchForPosts": true,
+  "skipComments": true,
+  "maxItems": 100
+}
 ```
 
-#### Step 5: Downloading Images
+## 📖 Complete Parameter Reference
 
-For the posts retrieved from the subreddit, we try to download their associated images. The `download_image` function is used for this. If the post doesn't have an `image_url`, the thumbnail URL is used as a fallback.
+### Input Sources (Choose One)
+- **`startUrls`** - Array of Reddit URLs to scrape
+- **`searchTerm`** - Search query for Reddit-wide search
 
-```python
-for z in range(3):
-    try:
-        image_url = subreddit_posts[z]["image_url"]
-    except:
-        image_url = subreddit_posts[z]["thumbnail_url"]
-    download_image(image_url)
+### Content Control
+- **`searchForPosts`** - Include posts (default: true)
+- **`searchForComments`** - Include comments (default: true)
+- **`skipComments`** - Skip comment scraping for performance
+- **`includeNSFW`** - Include NSFW content (default: false)
+
+### Sorting & Filtering
+- **`sortSearch`** - Sort order: "hot", "new", "top", "rising", "relevance"
+- **`filterByDate`** - Time filter: "hour", "day", "week", "month", "year", "all"
+- **`postDateLimit`** - ISO date string to filter posts after date
+
+### Limits & Pagination
+- **`maxItems`** - Maximum items to return (1-10000)
+- **`postsPerPage`** - Posts per page (1-100)
+- **`commentsPerPage`** - Comments per page (1-100)
+
+## 📊 Response Format
+
+### Success Response
+```json
+{
+  "success": true,
+  "data": {
+    "posts": [...],
+    "comments": [...],
+    "users": [...],
+    "communities": [...]
+  },
+  "metadata": {
+    "totalItems": 150,
+    "itemsReturned": 100,
+    "requestParams": {...},
+    "scrapedAt": "2025-07-16T17:00:07Z",
+    "executionTime": "2.3s"
+  },
+  "errors": []
+}
 ```
 
-### Complete Code Example
-
-```python
-from yars import YARS
-from utils import display_results, download_image
-
-miner = YARS()
-
-# Search for posts related to "OpenAI"
-search_results = miner.search_reddit("OpenAI", limit=3)
-display_results(search_results, "SEARCH")
-
-# Scrape post details using its permalink
-permalink = "https://www.reddit.com/r/getdisciplined/comments/1frb5ib/what_single_health_test_or_practice_has/".split('reddit.com')[1]
-post_details = miner.scrape_post_details(permalink)
-if post_details:
-    display_results(post_details, "POST DATA")
-else:
-    print("Failed to scrape post details.")
-
-# Fetch recent activity of user "iamsecb"
-user_data = miner.scrape_user_data("iamsecb", limit=2)
-display_results(user_data, "USER DATA")
-
-# Fetch top posts from the subreddit "generative" from the past week
-subreddit_posts = miner.fetch_subreddit_posts("generative", limit=11, category="top", time_filter="week")
-display_results(subreddit_posts, "EarthPorn SUBREDDIT New Posts")
-
-# Download images from the fetched posts
-for z in range(3):
-    try:
-        image_url = subreddit_posts[z]["image_url"]
-    except:
-        image_url = subreddit_posts[z]["thumbnail_url"]
-    download_image(image_url)
+### Error Response
+```json
+{
+  "success": false,
+  "data": null,
+  "metadata": {
+    "requestParams": {...},
+    "scrapedAt": "2025-07-16T17:00:07Z"
+  },
+  "errors": [
+    {
+      "code": "PROXY_ERROR",
+      "message": "Proxy connection failed",
+      "details": "Connection timeout after 10 seconds"
+    }
+  ]
+}
 ```
 
-You can now use these techniques to explore and scrape data from Reddit programmatically.
+## 🔗 n8n Integration
 
-## Contributing
+YARS is designed for seamless n8n integration:
 
-Contributions are welcome! For feature requests, bug reports, or questions, please open an issue. If you would like to contribute code, please open a pull request with your changes.
+### HTTP Request Node Configuration
+```javascript
+Method: POST
+URL: https://your-app.railway.app/api/scrape
+Headers: Content-Type: application/json
+Body: {
+  "startUrls": ["https://reddit.com/r/{{$json.subreddit}}"],
+  "maxItems": {{$json.limit}},
+  "sortSearch": "{{$json.sort}}"
+}
+```
 
-### Our Notable Contributors
+The structured response format makes it easy to process results in subsequent n8n nodes.
 
-<a href="https://github.com/datavorous/yars/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=datavorous/yars" />
+## 🛠️ Local Development
 
+### Prerequisites
+- Python 3.8+
+- pip or uv package manager
+
+### Installation
+```bash
+git clone https://github.com/your-username/yars-railway.git
+cd yars-railway
+pip install -r requirements.txt
+```
+
+### Environment Variables
+```env
+# Optional: Proxy configuration
+PROXY_HOST=gw.dataimpulse.com
+PROXY_PORT=823
+PROXY_USERNAME=your-username
+PROXY_PASSWORD=your-password
+
+# Server configuration
+PORT=8000
+```
+
+### Run Locally
+```bash
+python app.py
+```
+
+API will be available at `http://localhost:8000`
+
+## 🚨 Error Codes
+
+| Code | Description |
+|------|-------------|
+| `PROXY_ERROR` | Proxy connection issues |
+| `REDDIT_BLOCKED` | Reddit blocking requests |
+| `INVALID_PARAMS` | Parameter validation failed |
+| `TIMEOUT` | Request timeout |
+| `RATE_LIMITED` | Reddit rate limiting |
+
+## 📁 Project Structure
+
+```
+yars-railway/
+├── app.py                 # Main Flask application
+├── requirements.txt       # Python dependencies
+├── Procfile              # Railway deployment config
+├── src/
+│   └── yars/
+│       ├── yars.py       # Core scraping logic
+│       ├── validator.py  # Parameter validation
+│       ├── url_parser.py # URL parsing utilities
+│       ├── sessions.py   # Session management
+│       └── utils.py      # Utility functions
+└── example/
+    └── example.py        # Usage examples
+```
+
+## 🔒 Security & Best Practices
+
+- ✅ **Proxy Support** - Built-in proxy integration for IP rotation
+- ✅ **Rate Limiting** - Respects Reddit's rate limits
+- ✅ **Input Validation** - Comprehensive parameter validation
+- ✅ **Error Handling** - Graceful error handling and logging
+- ✅ **No API Keys** - Uses Reddit's public JSON endpoints
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+## 🆘 Support
+
+- 📖 **Documentation**: Visit `/docs` on your deployed instance
+- 🐛 **Issues**: [GitHub Issues](https://github.com/your-username/yars-railway/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/your-username/yars-railway/discussions)
+
+## 🚀 Deploy to Railway
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/your-template-id)
+
+---
+
+**Built with ❤️ for the Reddit scraping community**
