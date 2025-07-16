@@ -4,6 +4,7 @@ import time
 import random
 import logging
 import requests
+import os
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
@@ -19,8 +20,19 @@ class YARS:
 
     def __init__(self, proxy=None, timeout=10, random_user_agent=True):
         self.session = RandomUserAgentSession() if random_user_agent else requests.Session()
-        self.proxy = proxy
         self.timeout = timeout
+
+        # Configure DataImpulse proxy from environment variables if available
+        if proxy is None:
+            proxy_host = os.getenv('PROXY_HOST')
+            proxy_port = os.getenv('PROXY_PORT')
+            proxy_username = os.getenv('PROXY_USERNAME')
+            proxy_password = os.getenv('PROXY_PASSWORD')
+            
+            if all([proxy_host, proxy_port, proxy_username, proxy_password]):
+                proxy = f"http://{proxy_username}:{proxy_password}@{proxy_host}:{proxy_port}"
+        
+        self.proxy = proxy
 
         retries = Retry(
             total=5,

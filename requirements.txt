@@ -1,0 +1,5 @@
+flask>=3.0.3
+gunicorn>=21.2.0
+requests>=2.32.3
+pygments>=2.18.0
+urllib3>=2.0.0
