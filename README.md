@@ -194,13 +194,14 @@ API will be available at `http://localhost:8000`
 
 ## 🚨 Error Codes
 
-| Code | Description |
-|------|-------------|
-| `PROXY_ERROR` | Proxy connection issues |
-| `REDDIT_BLOCKED` | Reddit blocking requests |
-| `INVALID_PARAMS` | Parameter validation failed |
-| `TIMEOUT` | Request timeout |
-| `RATE_LIMITED` | Reddit rate limiting |
+| Code | Description | Recommended Action |
+|------|-------------|-------------------|
+| `PROXY_ERROR` | Proxy connection issues | Check proxy configuration and network connectivity |
+| `REDDIT_BLOCKED` | Reddit blocking requests | Use a proxy or wait before retrying |
+| `INVALID_PARAMS` | Parameter validation failed | Check parameter values and types |
+| `TIMEOUT` | Request timeout | Try reducing maxItems or check network connection |
+| `RATE_LIMITED` | Reddit rate limiting | Wait a few minutes before making another request |
+| `INVALID_RESPONSE` | Invalid response from Reddit | The requested content may not exist or be available |
 
 ## 📁 Project Structure
 

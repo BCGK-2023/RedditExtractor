@@ -87,22 +87,37 @@ def scrape_reddit():
         # Handle unexpected errors
         execution_time = time.time() - start_time
         error_code = "UNKNOWN_ERROR"
+        user_message = "An unexpected error occurred while processing your request"
+        actionable_details = "Please try again or contact support if the issue persists"
         
-        # Determine error type
-        if "proxy" in str(e).lower():
+        # Determine error type and provide actionable messages
+        error_str = str(e).lower()
+        if "proxy" in error_str or "connection" in error_str:
             error_code = "PROXY_ERROR"
-        elif "timeout" in str(e).lower():
+            user_message = "Proxy connection failed"
+            actionable_details = "Check your proxy configuration and network connectivity"
+        elif "timeout" in error_str:
             error_code = "TIMEOUT"
-        elif "reddit" in str(e).lower() and "block" in str(e).lower():
+            user_message = "Request timed out"
+            actionable_details = "Try reducing maxItems or check your network connection"
+        elif "reddit" in error_str and ("block" in error_str or "forbidden" in error_str):
             error_code = "REDDIT_BLOCKED"
-        elif "rate" in str(e).lower() and "limit" in str(e).lower():
+            user_message = "Reddit blocked the request"
+            actionable_details = "Use a proxy or wait before retrying"
+        elif "rate" in error_str and "limit" in error_str:
             error_code = "RATE_LIMITED"
+            user_message = "Rate limit exceeded"
+            actionable_details = "Wait a few minutes before making another request"
+        elif "json" in error_str or "parse" in error_str:
+            error_code = "INVALID_RESPONSE"
+            user_message = "Invalid response from Reddit"
+            actionable_details = "The requested content may not exist or be available"
         
         error_response = YARSValidator.create_error_response([
             {
                 "code": error_code,
-                "message": str(e),
-                "details": f"Execution time: {execution_time:.2f}s"
+                "message": user_message,
+                "details": actionable_details
             }
         ], params)
         
@@ -145,10 +160,22 @@ def test_proxy():
             })
             
     except Exception as e:
+        error_str = str(e).lower()
+        if "proxy" in error_str or "connection" in error_str:
+            user_message = "Proxy connection test failed"
+            actionable_details = "Check your proxy configuration and network connectivity"
+        elif "timeout" in error_str:
+            user_message = "Proxy test timed out"
+            actionable_details = "Your proxy server may be slow or unresponsive"
+        else:
+            user_message = "Proxy test failed"
+            actionable_details = "Unable to test proxy connectivity"
+            
         return jsonify({
             "success": False,
             "proxy_configured": True if hasattr(miner, 'proxy') and miner.proxy else False,
-            "error": str(e),
+            "error": user_message,
+            "details": actionable_details,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }), 500
 
@@ -415,19 +442,28 @@ Body:
             <h3>Error Codes</h3>
             <div class="params">
                 <div class="param">
-                    <span class="param-name">PROXY_ERROR</span> - Proxy connection issues
+                    <span class="param-name">PROXY_ERROR</span> - Proxy connection issues<br>
+                    <small>Action: Check proxy configuration and network connectivity</small>
                 </div>
                 <div class="param">
-                    <span class="param-name">REDDIT_BLOCKED</span> - Reddit blocking requests
+                    <span class="param-name">REDDIT_BLOCKED</span> - Reddit blocking requests<br>
+                    <small>Action: Use a proxy or wait before retrying</small>
                 </div>
                 <div class="param">
-                    <span class="param-name">INVALID_PARAMS</span> - Parameter validation failed
+                    <span class="param-name">INVALID_PARAMS</span> - Parameter validation failed<br>
+                    <small>Action: Check parameter values and types</small>
                 </div>
                 <div class="param">
-                    <span class="param-name">TIMEOUT</span> - Request timeout
+                    <span class="param-name">TIMEOUT</span> - Request timeout<br>
+                    <small>Action: Try reducing maxItems or check network connection</small>
                 </div>
                 <div class="param">
-                    <span class="param-name">RATE_LIMITED</span> - Reddit rate limiting
+                    <span class="param-name">RATE_LIMITED</span> - Reddit rate limiting<br>
+                    <small>Action: Wait a few minutes before making another request</small>
+                </div>
+                <div class="param">
+                    <span class="param-name">INVALID_RESPONSE</span> - Invalid response from Reddit<br>
+                    <small>Action: The requested content may not exist or be available</small>
                 </div>
             </div>
         </section>
