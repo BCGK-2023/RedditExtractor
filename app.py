@@ -5,12 +5,8 @@ from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 import requests
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_path = os.path.join(current_dir, "src")
-sys.path.append(src_path)
-
-from yars.yars import YARS
-from yars.validator import YARSValidator, ValidationError
+from yars import YARS
+from validator import YARSValidator, ValidationError
 
 app = Flask(__name__)
 
