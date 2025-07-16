@@ -2,17 +2,28 @@ import os
 import sys
 import time
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, Response
 import requests
 
 from yars import YARS
 from validator import YARSValidator, ValidationError
+from jobs import get_job_manager
+from webhooks import get_webhook_delivery
+from background_worker import start_background_worker
+from formatters import OutputFormatter
 
 app = Flask(__name__)
 
+# Start background worker for async job processing
+start_background_worker()
+
+# Get global instances
+job_manager = get_job_manager()
+webhook_delivery = get_webhook_delivery()
+
 @app.route('/api/scrape', methods=['POST'])
 def scrape_reddit():
-    """Main scraping endpoint with full parameter support"""
+    """Main scraping endpoint with synchronous and asynchronous support"""
     start_time = time.time()
     
     try:
@@ -30,54 +41,116 @@ def scrape_reddit():
                     {"code": e.code, "message": e.message, "details": e.details or ""}
                 ], params)), 400
         
-        # Initialize YARS with proxy support
-        miner = YARS()
+        # Check if webhookUrl is provided for async processing
+        webhook_url = validated_params.get('webhookUrl')
         
-        # Determine scraping method based on parameters
-        if validated_params.get('startUrls'):
-            # URL-based scraping
-            results = miner.scrape_by_urls(validated_params['startUrls'], validated_params)
-        elif validated_params.get('searchTerm'):
-            # Search-based scraping
-            search_results = miner.search_reddit_global(
-                validated_params['searchTerm'],
-                limit=validated_params.get('maxItems', 100),
-                sort=validated_params.get('sortSearch', 'relevance'),
-                time_filter=validated_params.get('filterByDate', 'all')
-            )
+        if webhook_url:
+            # Asynchronous processing with webhook
+            job_id = job_manager.create_job(validated_params, webhook_url)
             
-            # Filter results based on parameters
-            results = {
-                "posts": search_results if validated_params.get('searchForPosts', True) else [],
-                "comments": [],
-                "users": [],
-                "communities": []
-            }
-            
-            # Get comments for posts if requested
-            if validated_params.get('searchForComments', True) and not validated_params.get('skipComments', False):
-                for post in results['posts'][:5]:  # Limit comment scraping to first 5 posts
-                    if post.get('permalink'):
-                        post_details = miner.scrape_post_details(post['permalink'])
-                        if post_details and post_details.get('comments'):
-                            results['comments'].extend(post_details['comments'][:validated_params.get('commentsPerPage', 20)])
+            return jsonify({
+                "jobId": job_id,
+                "status": "pending",
+                "message": "Job created successfully. Results will be sent to your webhook URL when complete.",
+                "webhookUrl": webhook_url,
+                "statusUrl": f"/api/jobs/{job_id}",
+                "estimatedTime": f"{validated_params.get('maxItems', 100) * 0.1:.1f}s",
+                "createdAt": datetime.utcnow().isoformat() + "Z"
+            }), 202
+        
         else:
-            # This shouldn't happen due to validation, but handle gracefully
-            return jsonify(YARSValidator.create_error_response([
-                {"code": "INVALID_PARAMS", "message": "No valid input source provided", "details": ""}
-            ], params)), 400
-        
-        # Apply NSFW filtering if needed
-        if not validated_params.get('includeNSFW', False):
-            results['posts'] = [post for post in results['posts'] if not post.get('over_18', False)]
-        
-        # Calculate execution time
-        execution_time = time.time() - start_time
-        
-        # Create success response
-        response = YARSValidator.create_success_response(results, validated_params, execution_time)
-        
-        return jsonify(response)
+            # Synchronous processing (original behavior)
+            # Initialize YARS with proxy support
+            miner = YARS()
+            
+            # Determine scraping method based on parameters
+            if validated_params.get('startUrls'):
+                # URL-based scraping
+                results = miner.scrape_by_urls(validated_params['startUrls'], validated_params)
+            elif validated_params.get('searchTerm'):
+                # Search-based scraping
+                search_results = miner.search_reddit_global(
+                    validated_params['searchTerm'],
+                    limit=validated_params.get('maxItems', 100),
+                    sort=validated_params.get('sortSearch', 'relevance'),
+                    time_filter=validated_params.get('filterByDate', 'all')
+                )
+                
+                # Filter results based on parameters
+                results = {
+                    "posts": search_results if validated_params.get('searchForPosts', True) else [],
+                    "comments": [],
+                    "users": [],
+                    "communities": []
+                }
+                
+                # Get comments for posts if requested
+                if validated_params.get('searchForComments', True) and not validated_params.get('skipComments', False):
+                    for post in results['posts'][:5]:  # Limit comment scraping to first 5 posts
+                        if post.get('permalink'):
+                            post_details = miner.scrape_post_details(post['permalink'])
+                            if post_details and post_details.get('comments'):
+                                results['comments'].extend(post_details['comments'][:validated_params.get('commentsPerPage', 20)])
+            else:
+                # This shouldn't happen due to validation, but handle gracefully
+                return jsonify(YARSValidator.create_error_response([
+                    {"code": "INVALID_PARAMS", "message": "No valid input source provided", "details": ""}
+                ], params)), 400
+            
+            # Apply NSFW filtering if needed
+            if not validated_params.get('includeNSFW', False):
+                results['posts'] = [post for post in results['posts'] if not post.get('over_18', False)]
+            
+            # Calculate execution time
+            execution_time = time.time() - start_time
+            
+            # Create success response
+            response = YARSValidator.create_success_response(results, validated_params, execution_time)
+            
+            # Handle different output formats
+            output_format = validated_params.get('outputFormat', 'json')
+            
+            if output_format == 'json':
+                return jsonify(response)
+            else:
+                # Format data according to requested format
+                try:
+                    formatted_data = OutputFormatter.format_data(
+                        results, 
+                        output_format, 
+                        response.get('metadata', {})
+                    )
+                    
+                    content_type = OutputFormatter.get_content_type(output_format)
+                    file_extension = OutputFormatter.get_file_extension(output_format)
+                    
+                    # Create filename based on search term or timestamp
+                    if validated_params.get('searchTerm'):
+                        filename = f"reddit-search-{validated_params['searchTerm'][:20]}.{file_extension}"
+                    else:
+                        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                        filename = f"reddit-data-{timestamp}.{file_extension}"
+                    
+                    # Sanitize filename
+                    filename = "".join(c for c in filename if c.isalnum() or c in ".-_")
+                    
+                    return Response(
+                        formatted_data,
+                        mimetype=content_type,
+                        headers={
+                            "Content-Disposition": f"attachment; filename={filename}",
+                            "Content-Type": content_type
+                        }
+                    )
+                except Exception as format_error:
+                    # Fall back to JSON if formatting fails
+                    return jsonify(YARSValidator.create_error_response([
+                        {
+                            "code": "FORMAT_ERROR",
+                            "message": f"Failed to format data as {output_format}",
+                            "details": "Falling back to JSON format"
+                        }
+                    ], validated_params)), 500
         
     except Exception as e:
         # Handle unexpected errors
@@ -118,6 +191,94 @@ def scrape_reddit():
         ], params)
         
         return jsonify(error_response), 500
+
+@app.route('/api/jobs/<job_id>', methods=['GET'])
+def get_job_status(job_id):
+    """Get status and details of a specific job"""
+    job = job_manager.get_job(job_id)
+    
+    if not job:
+        return jsonify({
+            "success": False,
+            "error": "Job not found",
+            "jobId": job_id
+        }), 404
+    
+    # Create response with job details
+    response = {
+        "jobId": job["id"],
+        "status": job["status"],
+        "createdAt": job["created_at"],
+        "startedAt": job.get("started_at"),
+        "completedAt": job.get("completed_at"),
+        "progress": job.get("progress", 0),
+        "itemsScraped": job.get("items_scraped", 0),
+        "totalItems": job.get("total_items", 0),
+        "webhookUrl": job.get("webhook_url")
+    }
+    
+    # Add result data if job is completed
+    if job["status"] == "completed" and job.get("result"):
+        response["result"] = job["result"]
+    
+    # Add error if job failed
+    if job["status"] == "failed" and job.get("error"):
+        response["error"] = job["error"]
+    
+    return jsonify(response)
+
+@app.route('/api/jobs', methods=['GET'])
+def list_jobs():
+    """List recent jobs with optional filtering"""
+    limit = min(int(request.args.get('limit', 10)), 50)
+    status_filter = request.args.get('status')
+    
+    jobs = job_manager.get_recent_jobs(limit=limit * 2)  # Get more to allow for filtering
+    
+    # Filter by status if specified
+    if status_filter:
+        jobs = [job for job in jobs if job.get("status") == status_filter]
+    
+    # Limit results
+    jobs = jobs[:limit]
+    
+    # Remove sensitive data and result payload for list view
+    simplified_jobs = []
+    for job in jobs:
+        simplified_job = {
+            "jobId": job["id"],
+            "status": job["status"],
+            "createdAt": job["created_at"],
+            "completedAt": job.get("completed_at"),
+            "progress": job.get("progress", 0),
+            "itemsScraped": job.get("items_scraped", 0),
+            "totalItems": job.get("total_items", 0),
+            "hasWebhook": bool(job.get("webhook_url"))
+        }
+        simplified_jobs.append(simplified_job)
+    
+    return jsonify({
+        "jobs": simplified_jobs,
+        "count": len(simplified_jobs),
+        "summary": job_manager.get_jobs_summary()
+    })
+
+@app.route('/api/webhook/test', methods=['POST'])
+def test_webhook():
+    """Test webhook URL connectivity"""
+    data = request.get_json() or {}
+    webhook_url = data.get('webhookUrl')
+    
+    if not webhook_url:
+        return jsonify({
+            "success": False,
+            "error": "webhookUrl is required"
+        }), 400
+    
+    # Test the webhook URL
+    test_result = webhook_delivery.test_webhook_url(webhook_url)
+    
+    return jsonify(test_result)
 
 @app.route('/health')
 def health_check():
@@ -236,10 +397,12 @@ def api_documentation():
             <ul>
                 <li>🔄 Proxy support for production use</li>
                 <li>🎯 URL-based and search-based scraping</li>
-                <li>📊 Structured JSON responses</li>
+                <li>📊 Multiple output formats (JSON, CSV, RSS, XML)</li>
+                <li>🔄 Asynchronous processing with webhooks</li>
+                <li>📈 Job queue and progress tracking</li>
                 <li>🔧 Comprehensive parameter control</li>
                 <li>⚡ Perfect for n8n, Zapier, and custom workflows</li>
-                <li>📈 Built-in error handling and logging</li>
+                <li>🛡️ Built-in error handling and logging</li>
             </ul>
         </section>
         
@@ -253,6 +416,21 @@ def api_documentation():
                     <strong>Content-Type:</strong> application/json<br>
                     <strong>Request Body:</strong> JSON object with scraping parameters
                 </div>
+            </div>
+            
+            <div class="endpoint">
+                <h3><span class="method get">GET</span> /api/jobs/{jobId}</h3>
+                <p><strong>Job status</strong> - Get status and details of a specific job</p>
+            </div>
+            
+            <div class="endpoint">
+                <h3><span class="method get">GET</span> /api/jobs</h3>
+                <p><strong>List jobs</strong> - Get recent jobs with optional status filtering</p>
+            </div>
+            
+            <div class="endpoint">
+                <h3><span class="method post">POST</span> /api/webhook/test</h3>
+                <p><strong>Test webhook</strong> - Test webhook URL connectivity</p>
             </div>
             
             <div class="endpoint">
@@ -320,6 +498,21 @@ def api_documentation():
                 </div>
             </div>
             
+            <h3>Output and Delivery</h3>
+            <div class="params">
+                <div class="param">
+                    <span class="param-name">outputFormat</span> <span class="param-type">String</span> (default: "json")<br>
+                    Output format for the response data<br>
+                    Options: "json", "csv", "rss", "xml"<br>
+                    Note: Non-JSON formats will be returned as downloadable files
+                </div>
+                <div class="param">
+                    <span class="param-name">webhookUrl</span> <span class="param-type">String</span> (optional)<br>
+                    URL to receive webhook when job completes (enables async processing)<br>
+                    Example: <code>"https://your-webhook.com/reddit-results"</code>
+                </div>
+            </div>
+            
             <h3>Limits and Pagination</h3>
             <div class="params">
                 <div class="param">
@@ -340,7 +533,7 @@ def api_documentation():
         <section id="examples">
             <h2>💡 Usage Examples</h2>
             
-            <h3>Example 1: Scrape Subreddit Posts</h3>
+            <h3>Example 1: Synchronous Scraping</h3>
             <div class="example">
                 <strong>Request:</strong>
                 <pre>
@@ -357,7 +550,7 @@ Content-Type: application/json
                 </pre>
             </div>
             
-            <h3>Example 2: Search Across Reddit</h3>
+            <h3>Example 2: Asynchronous Scraping with Webhook</h3>
             <div class="example">
                 <strong>Request:</strong>
                 <pre>
@@ -369,12 +562,22 @@ Content-Type: application/json
   "searchForPosts": true,
   "sortSearch": "relevance",
   "filterByDate": "month",
-  "maxItems": 200
+  "maxItems": 5000,
+  "webhookUrl": "https://your-webhook.com/reddit-results"
+}
+                </pre>
+                <strong>Response (202 Accepted):</strong>
+                <pre>
+{
+  "jobId": "abc-123-def",
+  "status": "pending",
+  "statusUrl": "/api/jobs/abc-123-def",
+  "webhookUrl": "https://your-webhook.com/reddit-results"
 }
                 </pre>
             </div>
             
-            <h3>Example 3: User Posts Only</h3>
+            <h3>Example 3: CSV Export</h3>
             <div class="example">
                 <strong>Request:</strong>
                 <pre>
@@ -382,10 +585,47 @@ POST /api/scrape
 Content-Type: application/json
 
 {
-  "startUrls": ["https://reddit.com/user/someuser"],
+  "searchTerm": "python programming",
   "searchForPosts": true,
-  "skipComments": true,
-  "maxItems": 100
+  "maxItems": 100,
+  "outputFormat": "csv"
+}
+                </pre>
+                <strong>Response:</strong> Downloads a CSV file with structured Reddit data
+            </div>
+            
+            <h3>Example 4: RSS Feed Generation</h3>
+            <div class="example">
+                <strong>Request:</strong>
+                <pre>
+POST /api/scrape
+Content-Type: application/json
+
+{
+  "startUrls": ["https://reddit.com/r/technology"],
+  "searchForPosts": true,
+  "maxItems": 50,
+  "outputFormat": "rss",
+  "sortSearch": "hot"
+}
+                </pre>
+                <strong>Response:</strong> Downloads an RSS feed suitable for feed readers
+            </div>
+            
+            <h3>Example 5: Check Job Status</h3>
+            <div class="example">
+                <strong>Request:</strong>
+                <pre>
+GET /api/jobs/abc-123-def
+                </pre>
+                <strong>Response:</strong>
+                <pre>
+{
+  "jobId": "abc-123-def",
+  "status": "running",
+  "progress": 45,
+  "itemsScraped": 2250,
+  "totalItems": 5000
 }
                 </pre>
             </div>

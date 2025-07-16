@@ -145,6 +145,36 @@ class YARSValidator:
         else:
             cleaned_params['filterByDate'] = filter_by_date
         
+        # Validate webhookUrl if provided
+        webhook_url = params.get('webhookUrl')
+        if webhook_url is not None:
+            if not isinstance(webhook_url, str):
+                errors.append({
+                    "code": "INVALID_PARAMS",
+                    "message": "webhookUrl must be a string",
+                    "details": f"Received type: {type(webhook_url)}"
+                })
+            elif not webhook_url.startswith(('http://', 'https://')):
+                errors.append({
+                    "code": "INVALID_PARAMS",
+                    "message": "webhookUrl must be a valid HTTP/HTTPS URL",
+                    "details": f"Invalid URL: {webhook_url}"
+                })
+            else:
+                cleaned_params['webhookUrl'] = webhook_url
+        
+        # Validate outputFormat
+        output_format = params.get('outputFormat', 'json')
+        valid_formats = ['json', 'csv', 'rss', 'xml']
+        if output_format not in valid_formats:
+            errors.append({
+                "code": "INVALID_PARAMS",
+                "message": f"Invalid outputFormat: {output_format}",
+                "details": f"Valid options: {', '.join(valid_formats)}"
+            })
+        else:
+            cleaned_params['outputFormat'] = output_format
+        
         # Validate numeric parameters
         numeric_params = {
             'maxItems': {'default': 100, 'min': 1, 'max': 10000},
