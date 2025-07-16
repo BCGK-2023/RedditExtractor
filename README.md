@@ -227,12 +227,16 @@ API will be available at `http://localhost:8000`
 reddit-extractor/
 ├── app.py                 # Main Flask application
 ├── requirements.txt       # Python dependencies
-├── Procfile               # Railway deployment config
-├── yars.py                # Core scraping logic
-├── validator.py           # Parameter validation
-├── url_parser.py          # URL parsing utilities
-├── sessions.py            # Session management
-└── utils.py               # Utility functions
+├── Procfile              # Railway deployment config
+├── yars.py               # Core scraping logic
+├── validator.py          # Parameter validation
+├── url_parser.py         # URL parsing utilities
+├── sessions.py           # Session management
+├── agents.py             # User agent management
+├── utils.py              # Utility functions
+├── README.md             # Documentation
+├── LICENSE               # License file
+└── .gitignore            # Git configuration
 ```
 
 ## 🔒 Security & Best Practices

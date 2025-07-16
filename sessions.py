@@ -1,6 +1,6 @@
 from requests import Session
 
-from .agents import get_agent
+from agents import get_agent
 
 
 class RandomUserAgentSession(Session):
