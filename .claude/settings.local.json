@@ -12,7 +12,8 @@
       "Bash(export PORT=8000)",
       "Bash(timeout:*)",
       "Bash(curl:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(true)"
     ],
     "deny": []
   }
