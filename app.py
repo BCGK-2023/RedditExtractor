@@ -75,7 +75,7 @@ def scrape_reddit():
         
         else:
             # Synchronous processing with smart input handling
-            results = {"posts": [], "comments": [], "users": [], "communities": []}
+            results = {"posts": [], "communities": []}
             
             # Process each source according to strategy
             miner = YARS()
@@ -88,21 +88,24 @@ def scrape_reddit():
                 
                 try:
                     if source.type.value == 'search_term':
-                        # Handle search term
+                        # Handle search term with new parameters
                         search_results = miner.search_reddit_global(
                             source.normalized,
-                            limit=allocated_items,
+                            max_posts=allocated_items,
+                            max_comments_per_post=validated_params['content']['limits'].get('maxCommentsPerPost', 0),
+                            max_users_per_post=validated_params['content']['limits'].get('maxUsersPerPost', 0),
                             sort=validated_params['input']['filters'].get('sortBy', 'relevance'),
                             time_filter=validated_params['input']['filters'].get('timeframe', 'all')
                         )
                         
-                        if 'posts' in content_include:
-                            results['posts'].extend(search_results[:allocated_items])
+                        results['posts'].extend(search_results[:allocated_items])
                         
                     else:
-                        # Handle URL-based source
+                        # Handle URL-based source with new parameters
                         source_results = miner.scrape_by_urls([source.reddit_url], {
-                            'maxItems': allocated_items,
+                            'maxPosts': allocated_items,
+                            'maxCommentsPerPost': validated_params['content']['limits'].get('maxCommentsPerPost', 0),
+                            'maxUsersPerPost': validated_params['content']['limits'].get('maxUsersPerPost', 0),
                             'searchForPosts': 'posts' in content_include,
                             'searchForComments': 'comments' in content_include,
                             'searchForUsers': 'users' in content_include,
@@ -112,10 +115,11 @@ def scrape_reddit():
                             'includeNSFW': validated_params['input']['filters'].get('includeNSFW', False)
                         })
                         
-                        # Merge results
-                        for content_type in ['posts', 'comments', 'users', 'communities']:
-                            if content_type in content_include and content_type in source_results:
-                                results[content_type].extend(source_results[content_type])
+                        # Merge results from URL-based sources
+                        if 'posts' in content_include and 'posts' in source_results:
+                            results['posts'].extend(source_results['posts'])
+                        if 'communities' in content_include and 'communities' in source_results:
+                            results['communities'].extend(source_results['communities'])
                 
                 except Exception as source_error:
                     # Log source error but continue with other sources
@@ -124,19 +128,25 @@ def scrape_reddit():
             
             # Apply global filters
             if not validated_params['input']['filters'].get('includeNSFW', False):
-                results['posts'] = [post for post in results['posts'] if not post.get('over_18', False)]
+                # Filter NSFW posts (check metadata for over_18 field)
+                filtered_posts = []
+                for post in results['posts']:
+                    over_18 = post.get('over_18', False)
+                    if 'metadata' in post:
+                        over_18 = post['metadata'].get('over_18', False)
+                    if not over_18:
+                        filtered_posts.append(post)
+                results['posts'] = filtered_posts
             
-            # Apply total items limit
-            total_limit = validated_params['content']['limits'].get('totalItems', 100)
-            current_total = sum(len(results[key]) for key in results)
+            # Apply maxPosts limit
+            max_posts = validated_params['content']['limits'].get('maxPosts', 100)
+            if len(results['posts']) > max_posts:
+                results['posts'] = results['posts'][:max_posts]
             
-            if current_total > total_limit:
-                # Trim results proportionally
-                scale_factor = total_limit / current_total
-                for key in results:
-                    if results[key]:
-                        new_length = max(1, int(len(results[key]) * scale_factor))
-                        results[key] = results[key][:new_length]
+            # Apply maxCommunities limit
+            max_communities = validated_params['content']['limits'].get('maxCommunities', 10)
+            if len(results['communities']) > max_communities:
+                results['communities'] = results['communities'][:max_communities]
             
             # Calculate execution time
             execution_time = time.time() - start_time
@@ -585,9 +595,21 @@ https://reddit.com/user/someuser"></textarea>
                         
                         <!-- Basic Options -->
                         <div class="form-group">
-                            <label for="maxItems">Max Items</label>
-                            <input type="number" id="maxItems" value="50" min="1" max="10000">
-                            <small>Maximum number of items to return (1-10000)</small>
+                            <label for="maxPosts">Max Posts</label>
+                            <input type="number" id="maxPosts" value="50" min="1" max="10000">
+                            <small>Maximum number of posts to return (1-10000)</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="maxCommentsPerPost">Max Comments per Post</label>
+                            <input type="number" id="maxCommentsPerPost" value="10" min="0" max="500">
+                            <small>Maximum comments per post (0 = no comments)</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="maxUsersPerPost">Max Users per Post</label>
+                            <input type="number" id="maxUsersPerPost" value="5" min="0" max="100">
+                            <small>Maximum users per post (0 = no users)</small>
                         </div>
                         
                         <div class="form-group">
@@ -686,7 +708,9 @@ https://reddit.com/user/someuser"></textarea>
                         <div class="code-block">
                             <pre id="jsonOutput">{
   "searchTerm": "artificial intelligence",
-  "maxItems": 50,
+  "maxPosts": 50,
+  "maxCommentsPerPost": 10,
+  "maxUsersPerPost": 5,
   "sortSearch": "hot",
   "filterByDate": "all",
   "searchForPosts": true,
@@ -701,7 +725,9 @@ https://reddit.com/user/someuser"></textarea>
   -H "Content-Type: application/json" \\
   -d '{
     "searchTerm": "artificial intelligence",
-    "maxItems": 50,
+    "maxPosts": 50,
+    "maxCommentsPerPost": 10,
+    "maxUsersPerPost": 5,
     "sortSearch": "hot",
     "filterByDate": "all",
     "searchForPosts": true,
@@ -773,7 +799,9 @@ https://reddit.com/user/someuser"></textarea>
                 requestBody.searchForCommunities = document.getElementById('searchForCommunities').checked;
                 
                 // Basic options
-                requestBody.maxItems = parseInt(document.getElementById('maxItems').value);
+                requestBody.maxPosts = parseInt(document.getElementById('maxPosts').value);
+                requestBody.maxCommentsPerPost = parseInt(document.getElementById('maxCommentsPerPost').value);
+                requestBody.maxUsersPerPost = parseInt(document.getElementById('maxUsersPerPost').value);
                 requestBody.sortSearch = document.getElementById('sortSearch').value;
                 requestBody.filterByDate = document.getElementById('filterByDate').value;
                 

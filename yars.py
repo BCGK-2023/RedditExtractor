@@ -134,6 +134,53 @@ class YARS:
         logging.info("Successfully extracted comments")
         return extracted_comments
 
+    def _extract_users_from_post(self, post_info: Dict[str, Any], max_users: int) -> List[Dict[str, Any]]:
+        """
+        Extract users from a post (author + commenters)
+        
+        Args:
+            post_info: Post dictionary containing author and comments
+            max_users: Maximum number of users to extract
+            
+        Returns:
+            List of user dictionaries
+        """
+        users = []
+        seen_users = set()
+        
+        # Add post author
+        author_username = post_info.get("author", {}).get("username", "")
+        if author_username and author_username not in seen_users:
+            users.append({
+                "username": author_username,
+                "role": "author",
+                "profile_url": f"https://reddit.com/user/{author_username}"
+            })
+            seen_users.add(author_username)
+        
+        # Add commenters
+        def extract_commenters(comments):
+            for comment in comments:
+                if len(users) >= max_users:
+                    break
+                    
+                commenter = comment.get("author", "")
+                if commenter and commenter not in seen_users:
+                    users.append({
+                        "username": commenter,
+                        "role": "commenter",
+                        "profile_url": f"https://reddit.com/user/{commenter}"
+                    })
+                    seen_users.add(commenter)
+                
+                # Process replies recursively
+                if comment.get("replies"):
+                    extract_commenters(comment["replies"])
+        
+        extract_commenters(post_info.get("comments", []))
+        
+        return users[:max_users]
+
     def scrape_user_data(self, username, limit=10):
         logging.info("Scraping user data for %s, limit: %d", username, limit)
         base_url = f"https://www.reddit.com/user/{username}/.json"
@@ -216,24 +263,25 @@ class YARS:
         return all_items
 
     def fetch_subreddit_posts(
-        self, subreddit, limit=10, category="hot", time_filter="all"
+        self, subreddit, max_posts=10, max_comments_per_post=0, max_users_per_post=0, category="hot", time_filter="all"
     ):
         logging.info(
-            "Fetching subreddit/user posts for %s, limit: %d, category: %s, time_filter: %s",
+            "Fetching subreddit/user posts for %s, max_posts: %d, max_comments_per_post: %d, category: %s, time_filter: %s",
             subreddit,
-            limit,
+            max_posts,
+            max_comments_per_post,
             category,
             time_filter,
         )
         if category not in ["hot", "top", "new", "userhot", "usertop", "usernew"]:
             raise ValueError("Category for Subredit must be either 'hot', 'top', or 'new' or for User must be 'userhot', 'usertop', or 'usernew'")
 
-        batch_size = min(100, limit)
+        batch_size = min(100, max_posts)
         total_fetched = 0
         after = None
         all_posts = []
 
-        while total_fetched < limit:
+        while total_fetched < max_posts:
             if category == "hot":
                 url = f"https://www.reddit.com/r/{subreddit}/hot.json"
             elif category == "top":
@@ -272,26 +320,50 @@ class YARS:
 
             for post in posts:
                 post_data = post["data"]
+                
+                # Build enhanced post structure
                 post_info = {
-                    "title": post_data["title"],
-                    "author": post_data["author"],
-                    "permalink": post_data["permalink"],
-                    "score": post_data["score"],
-                    "num_comments": post_data["num_comments"],
-                    "created_utc": post_data["created_utc"],
+                    "title": post_data.get("title", ""),
+                    "author": {
+                        "username": post_data.get("author", ""),
+                        "profile_url": f"https://reddit.com/user/{post_data.get('author', '')}" if post_data.get("author") else ""
+                    },
+                    "content": post_data.get("selftext", ""),
+                    "metadata": {
+                        "score": post_data.get("score", 0),
+                        "num_comments": post_data.get("num_comments", 0),
+                        "created_utc": post_data.get("created_utc", 0),
+                        "subreddit": subreddit,
+                        "permalink": post_data.get("permalink", ""),
+                        "url": post_data.get("url", "")
+                    },
+                    "comments": [],
+                    "users": []
                 }
+                
+                # Add image URLs if available
                 if post_data.get("post_hint") == "image" and "url" in post_data:
-                    post_info["image_url"] = post_data["url"]
+                    post_info["metadata"]["image_url"] = post_data["url"]
                 elif "preview" in post_data and "images" in post_data["preview"]:
-                    post_info["image_url"] = post_data["preview"]["images"][0][
-                        "source"
-                    ]["url"]
-                if "thumbnail" in post_data and post_data["thumbnail"] != "self":
-                    post_info["thumbnail_url"] = post_data["thumbnail"]
+                    post_info["metadata"]["image_url"] = post_data["preview"]["images"][0]["source"]["url"]
+                
+                if "thumbnail" in post_data and post_data["thumbnail"] not in ["self", "default", ""]:
+                    post_info["metadata"]["thumbnail_url"] = post_data["thumbnail"]
+                
+                # Fetch comments if requested
+                if max_comments_per_post > 0:
+                    post_details = self.scrape_post_details(post_data.get("permalink", ""))
+                    if post_details and post_details.get("comments"):
+                        post_info["comments"] = post_details["comments"][:max_comments_per_post]
+                
+                # Extract users if requested
+                if max_users_per_post > 0:
+                    users = self._extract_users_from_post(post_info, max_users_per_post)
+                    post_info["users"] = users
 
                 all_posts.append(post_info)
                 total_fetched += 1
-                if total_fetched >= limit:
+                if total_fetched >= max_posts:
                     break
 
             after = data["data"].get("after")
@@ -304,25 +376,27 @@ class YARS:
         logging.info("Successfully fetched subreddit posts for %s", subreddit)
         return all_posts
 
-    def search_reddit_global(self, query: str, limit: int = 10, sort: str = "relevance", time_filter: str = "all") -> List[Dict[str, Any]]:
+    def search_reddit_global(self, query: str, max_posts: int = 10, max_comments_per_post: int = 0, max_users_per_post: int = 0, sort: str = "relevance", time_filter: str = "all") -> List[Dict[str, Any]]:
         """
         Search across all of Reddit for posts matching a query
         
         Args:
             query: Search query string
-            limit: Maximum number of results to return
+            max_posts: Maximum number of posts to return
+            max_comments_per_post: Maximum comments per post to fetch (0 = no comments)
+            max_users_per_post: Maximum users per post to extract (0 = no users)
             sort: Sort order ('relevance', 'hot', 'top', 'new')
             time_filter: Time filter ('hour', 'day', 'week', 'month', 'year', 'all')
         
         Returns:
-            List of post dictionaries
+            List of post dictionaries with nested comments and users
         """
-        logging.info("Searching Reddit globally for query: %s, limit: %d, sort: %s", query, limit, sort)
+        logging.info("Searching Reddit globally for query: %s, max_posts: %d, max_comments_per_post: %d", query, max_posts, max_comments_per_post)
         
         url = "https://www.reddit.com/search.json"
         params = {
             "q": query,
-            "limit": min(100, limit),
+            "limit": min(100, max_posts),
             "sort": sort,
             "type": "link",
             "t": time_filter
@@ -341,34 +415,54 @@ class YARS:
         
         for post in data.get("data", {}).get("children", []):
             post_data = post.get("data", {})
+            
+            # Build enhanced post structure
             post_info = {
                 "title": post_data.get("title", ""),
-                "author": post_data.get("author", ""),
-                "subreddit": post_data.get("subreddit", ""),
-                "permalink": post_data.get("permalink", ""),
-                "score": post_data.get("score", 0),
-                "num_comments": post_data.get("num_comments", 0),
-                "created_utc": post_data.get("created_utc", 0),
-                "url": post_data.get("url", ""),
-                "selftext": post_data.get("selftext", "")
+                "author": {
+                    "username": post_data.get("author", ""),
+                    "profile_url": f"https://reddit.com/user/{post_data.get('author', '')}" if post_data.get("author") else ""
+                },
+                "content": post_data.get("selftext", ""),
+                "metadata": {
+                    "score": post_data.get("score", 0),
+                    "num_comments": post_data.get("num_comments", 0),
+                    "created_utc": post_data.get("created_utc", 0),
+                    "subreddit": post_data.get("subreddit", ""),
+                    "permalink": post_data.get("permalink", ""),
+                    "url": post_data.get("url", "")
+                },
+                "comments": [],
+                "users": []
             }
             
             # Add image URLs if available
             if post_data.get("post_hint") == "image" and "url" in post_data:
-                post_info["image_url"] = post_data["url"]
+                post_info["metadata"]["image_url"] = post_data["url"]
             elif "preview" in post_data and "images" in post_data["preview"]:
-                post_info["image_url"] = post_data["preview"]["images"][0]["source"]["url"]
+                post_info["metadata"]["image_url"] = post_data["preview"]["images"][0]["source"]["url"]
             
             if "thumbnail" in post_data and post_data["thumbnail"] not in ["self", "default", ""]:
-                post_info["thumbnail_url"] = post_data["thumbnail"]
+                post_info["metadata"]["thumbnail_url"] = post_data["thumbnail"]
+            
+            # Fetch comments if requested
+            if max_comments_per_post > 0:
+                post_details = self.scrape_post_details(post_data.get("permalink", ""))
+                if post_details and post_details.get("comments"):
+                    post_info["comments"] = post_details["comments"][:max_comments_per_post]
+            
+            # Extract users if requested
+            if max_users_per_post > 0:
+                users = self._extract_users_from_post(post_info, max_users_per_post)
+                post_info["users"] = users
             
             results.append(post_info)
             
-            if len(results) >= limit:
+            if len(results) >= max_posts:
                 break
         
         logging.info("Successfully completed global search for %s, found %d results", query, len(results))
-        return results[:limit]
+        return results[:max_posts]
     
     def scrape_by_urls(self, urls: List[str], params: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -376,20 +470,23 @@ class YARS:
         
         Args:
             urls: List of Reddit URLs to scrape
-            params: Scraping parameters from API request
+            params: Scraping parameters with new structure
             
         Returns:
-            Dictionary with categorized results
+            Dictionary with categorized results (posts with nested comments and users)
         """
         logging.info("Starting URL-based scraping for %d URLs", len(urls))
+        
+        # Extract new parameters
+        max_posts = params.get('maxPosts', 100)
+        max_comments_per_post = params.get('maxCommentsPerPost', 0)
+        max_users_per_post = params.get('maxUsersPerPost', 0)
         
         # Categorize URLs
         categorized = RedditURLParser.categorize_urls(urls)
         
         results = {
             "posts": [],
-            "comments": [],
-            "users": [],
             "communities": []
         }
         
@@ -399,7 +496,9 @@ class YARS:
                 subreddit_name = subreddit_info['name']
                 posts = self.fetch_subreddit_posts(
                     subreddit_name,
-                    limit=params.get('maxItems', 100),
+                    max_posts=max_posts,
+                    max_comments_per_post=max_comments_per_post,
+                    max_users_per_post=max_users_per_post,
                     category=params.get('sortSearch', 'hot'),
                     time_filter=params.get('filterByDate', 'all')
                 )
@@ -419,28 +518,56 @@ class YARS:
                         'posts_count': len(posts)
                     })
         
-        # Scrape users
+        # Scrape users (convert to new structure)
         for user_info in categorized['users']:
             if not params.get('skipUserPosts', False):
                 username = user_info['username']
                 user_posts = self.scrape_user_data(
                     username,
-                    limit=params.get('maxItems', 100)
+                    limit=max_posts
                 )
+                
+                # Convert user posts to new structure
+                converted_posts = []
+                for user_post in user_posts:
+                    if len(converted_posts) >= max_posts:
+                        break
+                        
+                    # Convert old user post structure to new structure
+                    post_info = {
+                        "title": user_post.get("title", ""),
+                        "author": {
+                            "username": username,
+                            "profile_url": f"https://reddit.com/user/{username}"
+                        },
+                        "content": "",
+                        "metadata": {
+                            "score": 0,
+                            "num_comments": 0,
+                            "created_utc": user_post.get("created_utc", 0),
+                            "subreddit": user_post.get("subreddit", ""),
+                            "permalink": "",
+                            "url": user_post.get("url", "")
+                        },
+                        "comments": [],
+                        "users": []
+                    }
+                    
+                    # Add post author to users if requested
+                    if max_users_per_post > 0:
+                        post_info["users"].append({
+                            "username": username,
+                            "role": "author",
+                            "profile_url": f"https://reddit.com/user/{username}"
+                        })
+                    
+                    converted_posts.append(post_info)
                 
                 # Filter user posts by date if specified
                 if params.get('postDateLimit'):
-                    user_posts = self._filter_user_posts_by_date(user_posts, params['postDateLimit'])
+                    converted_posts = self._filter_posts_by_date(converted_posts, params['postDateLimit'])
                 
-                results['posts'].extend(user_posts)
-                
-                # Add user info
-                if params.get('searchForUsers', False):
-                    results['users'].append({
-                        'username': username,
-                        'url': user_info['url'],
-                        'posts_count': len(user_posts)
-                    })
+                results['posts'].extend(converted_posts)
         
         # Scrape individual posts
         for post_info in categorized['posts']:
@@ -449,35 +576,37 @@ class YARS:
                 post_details = self.scrape_post_details(permalink)
                 
                 if post_details:
+                    # Build new post structure
                     post_with_details = {
-                        'title': post_details['title'],
-                        'body': post_details['body'],
-                        'subreddit': post_info['subreddit'],
-                        'post_id': post_info['post_id'],
-                        'url': post_info['url'],
-                        'comments': post_details['comments'] if not params.get('skipComments', False) else []
+                        "title": post_details['title'],
+                        "author": {
+                            "username": "unknown",
+                            "profile_url": ""
+                        },
+                        "content": post_details['body'],
+                        "metadata": {
+                            "score": 0,
+                            "num_comments": len(post_details.get('comments', [])),
+                            "created_utc": 0,
+                            "subreddit": post_info['subreddit'],
+                            "permalink": permalink,
+                            "url": post_info['url']
+                        },
+                        "comments": post_details.get('comments', [])[:max_comments_per_post] if max_comments_per_post > 0 else [],
+                        "users": []
                     }
-                    results['posts'].append(post_with_details)
                     
-                    # Add comments to results if requested
-                    if params.get('searchForComments', True) and not params.get('skipComments', False):
-                        results['comments'].extend(post_details['comments'])
+                    # Extract users if requested
+                    if max_users_per_post > 0:
+                        users = self._extract_users_from_post(post_with_details, max_users_per_post)
+                        post_with_details["users"] = users
+                    
+                    results['posts'].append(post_with_details)
         
-        # Apply maxItems limit across all results
-        max_items = params.get('maxItems', 100)
-        total_items = len(results['posts']) + len(results['comments'])
+        # Apply maxPosts limit
+        results['posts'] = results['posts'][:max_posts]
         
-        if total_items > max_items:
-            # Prioritize posts over comments
-            if len(results['posts']) > max_items:
-                results['posts'] = results['posts'][:max_items]
-                results['comments'] = []
-            else:
-                remaining = max_items - len(results['posts'])
-                results['comments'] = results['comments'][:remaining]
-        
-        logging.info("URL-based scraping completed: %d posts, %d comments", 
-                    len(results['posts']), len(results['comments']))
+        logging.info("URL-based scraping completed: %d posts", len(results['posts']))
         
         return results
     
@@ -486,7 +615,12 @@ class YARS:
         filtered_posts = []
         
         for post in posts:
-            post_date = datetime.fromtimestamp(post.get('created_utc', 0))
+            # Handle both old and new post structures
+            created_utc = post.get('created_utc', 0)
+            if created_utc == 0 and 'metadata' in post:
+                created_utc = post['metadata'].get('created_utc', 0)
+            
+            post_date = datetime.fromtimestamp(created_utc)
             if post_date >= date_limit:
                 filtered_posts.append(post)
         

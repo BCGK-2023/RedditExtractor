@@ -118,13 +118,17 @@ class YARSValidator:
             content_include.append('communities')
         new_params["content"]["include"] = content_include
         
-        # Convert limits
+        # Convert limits to new structure
         if legacy_params.get('maxItems'):
-            new_params["content"]["limits"]["totalItems"] = legacy_params['maxItems']
+            new_params["content"]["limits"]["maxPosts"] = legacy_params['maxItems']
+        if legacy_params.get('maxPosts'):
+            new_params["content"]["limits"]["maxPosts"] = legacy_params['maxPosts']
         if legacy_params.get('commentsPerPage'):
-            new_params["content"]["limits"]["commentsPerPost"] = legacy_params['commentsPerPage']
-        if legacy_params.get('postsPerPage'):
-            new_params["content"]["limits"]["itemsPerPage"] = legacy_params['postsPerPage']
+            new_params["content"]["limits"]["maxCommentsPerPost"] = legacy_params['commentsPerPage']
+        if legacy_params.get('maxCommentsPerPost'):
+            new_params["content"]["limits"]["maxCommentsPerPost"] = legacy_params['maxCommentsPerPost']
+        if legacy_params.get('maxUsersPerPost'):
+            new_params["content"]["limits"]["maxUsersPerPost"] = legacy_params['maxUsersPerPost']
         
         # Convert output preferences
         if legacy_params.get('outputFormat'):
@@ -305,54 +309,72 @@ class YARSValidator:
         limits = content_params.get('limits', {})
         validated_limits = {}
         
-        # Total items limit
-        total_items = limits.get('totalItems', 100)
-        if not isinstance(total_items, int) or total_items < 1 or total_items > 10000:
+        # Max posts limit
+        max_posts = limits.get('maxPosts', 100)
+        if not isinstance(max_posts, int) or max_posts < 1 or max_posts > 10000:
             errors.append({
-                "code": "INVALID_TOTAL_ITEMS",
-                "message": "totalItems must be an integer between 1 and 10000",
-                "details": f"Received: {total_items}"
+                "code": "INVALID_MAX_POSTS",
+                "message": "maxPosts must be an integer between 1 and 10000",
+                "details": f"Received: {max_posts}"
             })
         else:
-            validated_limits['totalItems'] = total_items
-        
-        # Items per source limit
-        items_per_source = limits.get('itemsPerSource')
-        if items_per_source is not None:
-            if not isinstance(items_per_source, int) or items_per_source < 1:
-                errors.append({
-                    "code": "INVALID_ITEMS_PER_SOURCE",
-                    "message": "itemsPerSource must be a positive integer",
-                    "details": f"Received: {items_per_source}"
-                })
-            else:
-                validated_limits['itemsPerSource'] = items_per_source
+            validated_limits['maxPosts'] = max_posts
         
         # Comments per post limit
-        comments_per_post = limits.get('commentsPerPost', 20)
-        if not isinstance(comments_per_post, int) or comments_per_post < 0 or comments_per_post > 100:
+        max_comments_per_post = limits.get('maxCommentsPerPost', 0)
+        if not isinstance(max_comments_per_post, int) or max_comments_per_post < 0 or max_comments_per_post > 500:
             errors.append({
-                "code": "INVALID_COMMENTS_PER_POST",
-                "message": "commentsPerPost must be an integer between 0 and 100",
-                "details": f"Received: {comments_per_post}"
+                "code": "INVALID_MAX_COMMENTS_PER_POST",
+                "message": "maxCommentsPerPost must be an integer between 0 and 500",
+                "details": f"Received: {max_comments_per_post}"
             })
         else:
-            validated_limits['commentsPerPost'] = comments_per_post
+            validated_limits['maxCommentsPerPost'] = max_comments_per_post
+        
+        # Users per post limit
+        max_users_per_post = limits.get('maxUsersPerPost', 0)
+        if not isinstance(max_users_per_post, int) or max_users_per_post < 0 or max_users_per_post > 100:
+            errors.append({
+                "code": "INVALID_MAX_USERS_PER_POST",
+                "message": "maxUsersPerPost must be an integer between 0 and 100",
+                "details": f"Received: {max_users_per_post}"
+            })
+        else:
+            validated_limits['maxUsersPerPost'] = max_users_per_post
+        
+        # Max communities limit
+        max_communities = limits.get('maxCommunities', 10)
+        if not isinstance(max_communities, int) or max_communities < 0 or max_communities > 100:
+            errors.append({
+                "code": "INVALID_MAX_COMMUNITIES",
+                "message": "maxCommunities must be an integer between 0 and 100",
+                "details": f"Received: {max_communities}"
+            })
+        else:
+            validated_limits['maxCommunities'] = max_communities
         
         # Add warnings for potentially problematic configurations
-        if total_items > 1000 and 'comments' in validated_content.get('include', []):
+        if max_posts > 1000 and max_comments_per_post > 0:
             warnings.append(ValidationWarning(
                 "LARGE_REQUEST_WITH_COMMENTS",
                 "Large requests with comments may be slow",
-                "Consider using async delivery mode or reducing totalItems"
+                "Consider using async delivery mode or reducing maxPosts"
             ))
         
         # Warn about inefficient comment limits
-        if comments_per_post > 50 and 'comments' in validated_content.get('include', []):
+        if max_comments_per_post > 50:
             warnings.append(ValidationWarning(
                 "HIGH_COMMENTS_PER_POST",
-                f"High commentsPerPost ({comments_per_post}) may slow down processing",
-                "Consider reducing commentsPerPost for better performance"
+                f"High maxCommentsPerPost ({max_comments_per_post}) may slow down processing",
+                "Consider reducing maxCommentsPerPost for better performance"
+            ))
+        
+        # Warn about very high user extraction
+        if max_users_per_post > 20:
+            warnings.append(ValidationWarning(
+                "HIGH_USERS_PER_POST",
+                f"High maxUsersPerPost ({max_users_per_post}) may slow down processing",
+                "Consider reducing maxUsersPerPost for better performance"
             ))
         
         validated_content["limits"] = validated_limits
@@ -431,27 +453,36 @@ class YARSValidator:
         """Validate rules that span multiple sections"""
         
         # Extract key parameters
-        total_items = params.get('content', {}).get('limits', {}).get('totalItems', 100)
+        max_posts = params.get('content', {}).get('limits', {}).get('maxPosts', 100)
+        max_comments_per_post = params.get('content', {}).get('limits', {}).get('maxCommentsPerPost', 0)
+        max_users_per_post = params.get('content', {}).get('limits', {}).get('maxUsersPerPost', 0)
         delivery_mode = params.get('output', {}).get('delivery', {}).get('mode', 'sync')
         output_format = params.get('output', {}).get('format', 'json')
         sources = params.get('input', {}).get('sources', [])
-        items_per_source = params.get('content', {}).get('limits', {}).get('itemsPerSource')
         content_include = params.get('content', {}).get('include', [])
         
         # Check for sync mode with large requests
-        if delivery_mode == 'sync' and total_items > 1000:
+        if delivery_mode == 'sync' and max_posts > 1000:
             warnings.append(ValidationWarning(
                 "LARGE_SYNC_REQUEST",
-                f"Sync mode with {total_items} items may timeout",
+                f"Sync mode with {max_posts} posts may timeout",
                 "Consider using async delivery mode for large requests"
             ))
         
-        # Check for multiple sources without per-source limits
-        if len(sources) > 1 and not items_per_source:
+        # Check for sync mode with comments enabled
+        if delivery_mode == 'sync' and max_comments_per_post > 0 and max_posts > 50:
             warnings.append(ValidationWarning(
-                "MULTIPLE_SOURCES_NO_LIMIT",
-                f"Multiple sources ({len(sources)}) without itemsPerSource limit",
-                "Items will be distributed based on source activity"
+                "SYNC_WITH_COMMENTS",
+                f"Sync mode with {max_posts} posts and comments may be slow",
+                "Consider using async delivery mode or reducing maxPosts"
+            ))
+        
+        # Check for multiple sources
+        if len(sources) > 1:
+            warnings.append(ValidationWarning(
+                "MULTIPLE_SOURCES",
+                f"Multiple sources ({len(sources)}) will be processed sequentially",
+                "Results will be combined from all sources"
             ))
     
     @staticmethod
@@ -499,14 +530,19 @@ class YARSValidator:
     @staticmethod
     def create_success_response(data: Dict[str, Any], request_params: Dict[str, Any], execution_time: float, warnings: List[ValidationWarning] = None) -> Dict[str, Any]:
         """Create standardized success response"""
-        total_items = sum(len(v) if isinstance(v, list) else 0 for v in data.values())
+        total_posts = len(data.get('posts', []))
+        total_comments = sum(len(post.get('comments', [])) for post in data.get('posts', []))
+        total_users = sum(len(post.get('users', [])) for post in data.get('posts', []))
+        total_communities = len(data.get('communities', []))
         
         return {
             "success": True,
             "data": data,
             "metadata": {
-                "totalItems": total_items,
-                "itemsReturned": total_items,
+                "totalPosts": total_posts,
+                "totalComments": total_comments,
+                "totalUsers": total_users,
+                "totalCommunities": total_communities,
                 "requestParams": request_params,
                 "scrapedAt": datetime.utcnow().isoformat() + "Z",
                 "executionTime": f"{execution_time:.2f}s"
