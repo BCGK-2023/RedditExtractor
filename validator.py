@@ -1,237 +1,458 @@
 from datetime import datetime
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Union, Any, Tuple
 import re
+from error_enhancer import ErrorEnhancer
 
 class ValidationError(Exception):
-    def __init__(self, code: str, message: str, details: str = None):
+    def __init__(self, code: str, message: str, details: str = None, suggestions: List[str] = None):
         self.code = code
         self.message = message
         self.details = details
+        self.suggestions = suggestions or []
         super().__init__(message)
 
+class ValidationWarning:
+    def __init__(self, code: str, message: str, suggestion: str = None):
+        self.code = code
+        self.message = message
+        self.suggestion = suggestion
+
 class YARSValidator:
+    """
+    Enhanced validator supporting both legacy flat structure and new nested structure
+    """
     
     VALID_SORT_OPTIONS = ["hot", "new", "top", "rising", "relevance"]
     VALID_DATE_FILTERS = ["hour", "day", "week", "month", "year", "all"]
+    VALID_CONTENT_TYPES = ["posts", "comments", "users", "communities"]
+    VALID_OUTPUT_FORMATS = ["json", "csv", "rss", "xml"]
+    VALID_DELIVERY_MODES = ["sync", "async"]
+    
+    @staticmethod
+    def validate_request(params: Dict[str, Any]) -> Tuple[Dict[str, Any], List[ValidationWarning]]:
+        """
+        Main validation entry point supporting both legacy and new format
+        Returns: (validated_params, warnings)
+        """
+        warnings = []
+        
+        # Detect if this is legacy format or new format
+        if YARSValidator._is_legacy_format(params):
+            # Convert legacy format to new format
+            converted_params = YARSValidator._convert_legacy_to_new(params)
+            warnings.append(ValidationWarning(
+                "LEGACY_FORMAT", 
+                "Using legacy parameter format",
+                "Consider migrating to new nested structure for better clarity"
+            ))
+            params = converted_params
+        
+        # Validate the new nested structure
+        validated_params, additional_warnings = YARSValidator._validate_new_format(params)
+        warnings.extend(additional_warnings)
+        
+        return validated_params, warnings
     
     @staticmethod
     def validate_scrape_params(params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Validate and sanitize parameters for the /api/scrape endpoint
-        Returns cleaned parameters or raises ValidationError
+        Legacy method for backward compatibility
         """
-        errors = []
-        cleaned_params = {}
-        
-        # Validate input sources (mutually exclusive)
-        start_urls = params.get('startUrls')
-        search_term = params.get('searchTerm')
-        
-        if start_urls and search_term:
-            errors.append({
-                "code": "INVALID_PARAMS",
-                "message": "startUrls and searchTerm are mutually exclusive",
-                "details": "Provide either startUrls or searchTerm, not both"
-            })
-        
-        if not start_urls and not search_term:
-            errors.append({
-                "code": "INVALID_PARAMS", 
-                "message": "Either startUrls or searchTerm is required",
-                "details": "You must provide either startUrls array or searchTerm string"
-            })
-        
-        # Validate startUrls
-        if start_urls:
-            if not isinstance(start_urls, list):
-                errors.append({
-                    "code": "INVALID_PARAMS",
-                    "message": "startUrls must be an array",
-                    "details": "startUrls should be a JSON array of Reddit URLs"
-                })
-            else:
-                valid_urls = []
-                for url in start_urls:
-                    if not isinstance(url, str):
-                        errors.append({
-                            "code": "INVALID_PARAMS",
-                            "message": "All startUrls must be strings",
-                            "details": f"Invalid URL type: {type(url)}"
-                        })
-                    elif not YARSValidator._is_valid_reddit_url(url):
-                        errors.append({
-                            "code": "INVALID_PARAMS",
-                            "message": f"Invalid Reddit URL: {url}",
-                            "details": "URLs must be valid Reddit URLs (reddit.com or old.reddit.com)"
-                        })
-                    else:
-                        valid_urls.append(url)
-                cleaned_params['startUrls'] = valid_urls
-        
-        # Validate searchTerm
-        if search_term:
-            if not isinstance(search_term, str):
-                errors.append({
-                    "code": "INVALID_PARAMS",
-                    "message": "searchTerm must be a string",
-                    "details": f"Received type: {type(search_term)}"
-                })
-            elif len(search_term.strip()) == 0:
-                errors.append({
-                    "code": "INVALID_PARAMS",
-                    "message": "searchTerm cannot be empty",
-                    "details": "Provide a non-empty search term"
-                })
-            elif len(search_term) > 500:
-                errors.append({
-                    "code": "INVALID_PARAMS",
-                    "message": "searchTerm too long",
-                    "details": "Search term must be 500 characters or less"
-                })
-            else:
-                cleaned_params['searchTerm'] = search_term.strip()
-        
-        # Validate boolean flags
-        bool_params = [
-            'skipComments', 'skipUserPosts', 'skipCommunity', 
-            'searchForPosts', 'searchForComments', 'searchForCommunities', 
-            'searchForUsers', 'includeNSFW'
+        validated_params, warnings = YARSValidator.validate_request(params)
+        return validated_params
+    
+    @staticmethod
+    def _is_legacy_format(params: Dict[str, Any]) -> bool:
+        """Detect if parameters use legacy flat structure"""
+        legacy_indicators = [
+            'startUrls', 'searchTerm', 'maxItems', 'searchForPosts', 
+            'searchForComments', 'skipComments', 'postsPerPage', 'commentsPerPage'
         ]
-        
-        for param in bool_params:
-            value = params.get(param)
-            if value is not None:
-                if not isinstance(value, bool):
-                    errors.append({
-                        "code": "INVALID_PARAMS",
-                        "message": f"{param} must be a boolean",
-                        "details": f"Received type: {type(value)}"
-                    })
-                else:
-                    cleaned_params[param] = value
-            else:
-                # Set defaults
-                defaults = {
-                    'skipComments': False,
-                    'skipUserPosts': False, 
-                    'skipCommunity': False,
-                    'searchForPosts': True,
-                    'searchForComments': True,
-                    'searchForCommunities': False,
-                    'searchForUsers': False,
-                    'includeNSFW': False
+        return any(key in params for key in legacy_indicators)
+    
+    @staticmethod
+    def _convert_legacy_to_new(legacy_params: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert legacy flat structure to new nested structure"""
+        new_params = {
+            "input": {
+                "sources": [],
+                "filters": {}
+            },
+            "content": {
+                "include": [],
+                "limits": {}
+            },
+            "output": {
+                "format": "json",
+                "delivery": {
+                    "mode": "sync"
                 }
-                cleaned_params[param] = defaults.get(param, False)
+            }
+        }
         
-        # Validate sortSearch
-        sort_search = params.get('sortSearch', 'hot')
-        if sort_search not in YARSValidator.VALID_SORT_OPTIONS:
+        # Convert input sources
+        if legacy_params.get('startUrls'):
+            new_params["input"]["sources"].extend(legacy_params['startUrls'])
+        if legacy_params.get('searchTerm'):
+            new_params["input"]["sources"].append(legacy_params['searchTerm'])
+        
+        # Convert input filters
+        if legacy_params.get('filterByDate'):
+            new_params["input"]["filters"]["timeframe"] = legacy_params['filterByDate']
+        if legacy_params.get('sortSearch'):
+            new_params["input"]["filters"]["sortBy"] = legacy_params['sortSearch']
+        if legacy_params.get('includeNSFW') is not None:
+            new_params["input"]["filters"]["includeNSFW"] = legacy_params['includeNSFW']
+        if legacy_params.get('postDateLimit'):
+            new_params["input"]["filters"]["afterDate"] = legacy_params['postDateLimit']
+        
+        # Convert content preferences
+        content_include = []
+        if legacy_params.get('searchForPosts', True):
+            content_include.append('posts')
+        if legacy_params.get('searchForComments', True) and not legacy_params.get('skipComments', False):
+            content_include.append('comments')
+        if legacy_params.get('searchForUsers', False):
+            content_include.append('users')
+        if legacy_params.get('searchForCommunities', False):
+            content_include.append('communities')
+        new_params["content"]["include"] = content_include
+        
+        # Convert limits
+        if legacy_params.get('maxItems'):
+            new_params["content"]["limits"]["totalItems"] = legacy_params['maxItems']
+        if legacy_params.get('commentsPerPage'):
+            new_params["content"]["limits"]["commentsPerPost"] = legacy_params['commentsPerPage']
+        if legacy_params.get('postsPerPage'):
+            new_params["content"]["limits"]["itemsPerPage"] = legacy_params['postsPerPage']
+        
+        # Convert output preferences
+        if legacy_params.get('outputFormat'):
+            new_params["output"]["format"] = legacy_params['outputFormat']
+        if legacy_params.get('webhookUrl'):
+            new_params["output"]["delivery"]["mode"] = "async"
+            new_params["output"]["delivery"]["webhookUrl"] = legacy_params['webhookUrl']
+        
+        return new_params
+    
+    @staticmethod
+    def _validate_new_format(params: Dict[str, Any]) -> Tuple[Dict[str, Any], List[ValidationWarning]]:
+        """Validate the new nested parameter structure"""
+        errors = []
+        warnings = []
+        validated = {}
+        
+        # Validate input section
+        input_section = params.get('input', {})
+        validated['input'] = YARSValidator._validate_input_section(input_section, errors)
+        
+        # Validate content section
+        content_section = params.get('content', {})
+        validated['content'] = YARSValidator._validate_content_section(content_section, errors, warnings)
+        
+        # Validate output section
+        output_section = params.get('output', {})
+        validated['output'] = YARSValidator._validate_output_section(output_section, errors)
+        
+        # Cross-section validation and warnings
+        YARSValidator._validate_cross_section_rules(validated, errors, warnings)
+        
+        if errors:
+            # Create enhanced error response for context
+            error_response = YARSValidator.create_error_response(errors, warnings, params)
+            
+            raise ValidationError(
+                code="VALIDATION_FAILED",
+                message="Parameter validation failed",
+                details=error_response
+            )
+        
+        return validated, warnings
+    
+    @staticmethod
+    def _validate_input_section(input_params: Dict[str, Any], errors: List[Dict]) -> Dict[str, Any]:
+        """Validate input section parameters"""
+        validated_input = {
+            "sources": [],
+            "filters": {}
+        }
+        
+        # Validate sources
+        sources = input_params.get('sources', [])
+        if not sources:
             errors.append({
-                "code": "INVALID_PARAMS",
-                "message": f"Invalid sortSearch value: {sort_search}",
-                "details": f"Valid options: {', '.join(YARSValidator.VALID_SORT_OPTIONS)}"
+                "code": "NO_INPUT_SOURCES",
+                "message": "At least one input source is required",
+                "details": "Provide Reddit URLs, search terms, or subreddit names in the sources array"
+            })
+        elif not isinstance(sources, list):
+            errors.append({
+                "code": "INVALID_SOURCES_TYPE",
+                "message": "Sources must be an array",
+                "details": "Provide an array of strings containing URLs, search terms, or subreddit names"
             })
         else:
-            cleaned_params['sortSearch'] = sort_search
+            validated_sources = []
+            for source in sources:
+                if not isinstance(source, str):
+                    errors.append({
+                        "code": "INVALID_SOURCE_TYPE",
+                        "message": f"Source must be a string, got {type(source)}",
+                        "details": "Each source should be a URL, search term, or subreddit name"
+                    })
+                elif source.strip():
+                    validated_sources.append(source.strip())
+            validated_input["sources"] = validated_sources
         
-        # Validate filterByDate
-        filter_by_date = params.get('filterByDate', 'all')
-        if filter_by_date not in YARSValidator.VALID_DATE_FILTERS:
+        # Validate filters
+        filters = input_params.get('filters', {})
+        validated_filters = {}
+        
+        # Timeframe filter
+        timeframe = filters.get('timeframe', 'all')
+        if timeframe not in YARSValidator.VALID_DATE_FILTERS:
             errors.append({
-                "code": "INVALID_PARAMS",
-                "message": f"Invalid filterByDate value: {filter_by_date}",
+                "code": "INVALID_TIMEFRAME",
+                "message": f"Invalid timeframe: {timeframe}",
                 "details": f"Valid options: {', '.join(YARSValidator.VALID_DATE_FILTERS)}"
             })
         else:
-            cleaned_params['filterByDate'] = filter_by_date
+            validated_filters['timeframe'] = timeframe
         
-        # Validate webhookUrl if provided
-        webhook_url = params.get('webhookUrl')
-        if webhook_url is not None:
-            if not isinstance(webhook_url, str):
-                errors.append({
-                    "code": "INVALID_PARAMS",
-                    "message": "webhookUrl must be a string",
-                    "details": f"Received type: {type(webhook_url)}"
-                })
-            elif not webhook_url.startswith(('http://', 'https://')):
-                errors.append({
-                    "code": "INVALID_PARAMS",
-                    "message": "webhookUrl must be a valid HTTP/HTTPS URL",
-                    "details": f"Invalid URL: {webhook_url}"
-                })
-            else:
-                cleaned_params['webhookUrl'] = webhook_url
-        
-        # Validate outputFormat
-        output_format = params.get('outputFormat', 'json')
-        valid_formats = ['json', 'csv', 'rss', 'xml']
-        if output_format not in valid_formats:
+        # Sort filter
+        sort_by = filters.get('sortBy', 'hot')
+        if sort_by not in YARSValidator.VALID_SORT_OPTIONS:
             errors.append({
-                "code": "INVALID_PARAMS",
-                "message": f"Invalid outputFormat: {output_format}",
-                "details": f"Valid options: {', '.join(valid_formats)}"
+                "code": "INVALID_SORT",
+                "message": f"Invalid sortBy: {sort_by}",
+                "details": f"Valid options: {', '.join(YARSValidator.VALID_SORT_OPTIONS)}"
             })
         else:
-            cleaned_params['outputFormat'] = output_format
+            validated_filters['sortBy'] = sort_by
         
-        # Validate numeric parameters
-        numeric_params = {
-            'maxItems': {'default': 100, 'min': 1, 'max': 10000},
-            'postsPerPage': {'default': 25, 'min': 1, 'max': 100},
-            'commentsPerPage': {'default': 20, 'min': 1, 'max': 100},
-            'communityPagesLimit': {'default': 1, 'min': 1, 'max': 50},
-            'userPagesLimit': {'default': 1, 'min': 1, 'max': 50},
-            'pageScrollTimeout': {'default': 30, 'min': 5, 'max': 300}
-        }
+        # NSFW filter
+        include_nsfw = filters.get('includeNSFW', False)
+        if not isinstance(include_nsfw, bool):
+            errors.append({
+                "code": "INVALID_NSFW_FLAG",
+                "message": "includeNSFW must be a boolean",
+                "details": f"Received type: {type(include_nsfw)}"
+            })
+        else:
+            validated_filters['includeNSFW'] = include_nsfw
         
-        for param, config in numeric_params.items():
-            value = params.get(param, config['default'])
-            if not isinstance(value, int):
-                errors.append({
-                    "code": "INVALID_PARAMS",
-                    "message": f"{param} must be an integer",
-                    "details": f"Received type: {type(value)}"
-                })
-            elif value < config['min'] or value > config['max']:
-                errors.append({
-                    "code": "INVALID_PARAMS",
-                    "message": f"{param} must be between {config['min']} and {config['max']}",
-                    "details": f"Received value: {value}"
-                })
-            else:
-                cleaned_params[param] = value
-        
-        # Validate postDateLimit
-        post_date_limit = params.get('postDateLimit')
-        if post_date_limit is not None:
-            if isinstance(post_date_limit, str):
+        # After date filter
+        after_date = filters.get('afterDate')
+        if after_date is not None:
+            if isinstance(after_date, str):
                 try:
-                    # Try to parse ISO date string
-                    parsed_date = datetime.fromisoformat(post_date_limit.replace('Z', '+00:00'))
-                    cleaned_params['postDateLimit'] = parsed_date
+                    parsed_date = datetime.fromisoformat(after_date.replace('Z', '+00:00'))
+                    validated_filters['afterDate'] = parsed_date
                 except ValueError:
                     errors.append({
-                        "code": "INVALID_PARAMS",
-                        "message": "Invalid postDateLimit format",
+                        "code": "INVALID_DATE_FORMAT",
+                        "message": "Invalid afterDate format",
                         "details": "Must be ISO 8601 date string (e.g., '2024-01-01' or '2024-01-01T00:00:00Z')"
                     })
             else:
                 errors.append({
-                    "code": "INVALID_PARAMS",
-                    "message": "postDateLimit must be a string or null",
-                    "details": f"Received type: {type(post_date_limit)}"
+                    "code": "INVALID_DATE_TYPE",
+                    "message": "afterDate must be a string",
+                    "details": f"Received type: {type(after_date)}"
                 })
         
-        # If there are validation errors, raise exception
-        if errors:
-            raise ValidationError(
-                code="INVALID_PARAMS",
-                message="Parameter validation failed",
-                details=errors
-            )
+        validated_input["filters"] = validated_filters
+        return validated_input
+    
+    @staticmethod
+    def _validate_content_section(content_params: Dict[str, Any], errors: List[Dict], warnings: List[ValidationWarning]) -> Dict[str, Any]:
+        """Validate content section parameters"""
+        validated_content = {
+            "include": [],
+            "limits": {}
+        }
         
-        return cleaned_params
+        # Validate include array
+        include = content_params.get('include', ['posts'])
+        if not isinstance(include, list):
+            errors.append({
+                "code": "INVALID_INCLUDE_TYPE",
+                "message": "include must be an array",
+                "details": f"Valid content types: {', '.join(YARSValidator.VALID_CONTENT_TYPES)}"
+            })
+        else:
+            validated_include = []
+            for content_type in include:
+                if content_type not in YARSValidator.VALID_CONTENT_TYPES:
+                    errors.append({
+                        "code": "INVALID_CONTENT_TYPE",
+                        "message": f"Invalid content type: {content_type}",
+                        "details": f"Valid options: {', '.join(YARSValidator.VALID_CONTENT_TYPES)}"
+                    })
+                else:
+                    validated_include.append(content_type)
+            
+            if not validated_include:
+                errors.append({
+                    "code": "NO_CONTENT_TYPES",
+                    "message": "At least one content type must be included",
+                    "details": f"Choose from: {', '.join(YARSValidator.VALID_CONTENT_TYPES)}"
+                })
+            
+            validated_content["include"] = validated_include
+        
+        # Validate limits
+        limits = content_params.get('limits', {})
+        validated_limits = {}
+        
+        # Total items limit
+        total_items = limits.get('totalItems', 100)
+        if not isinstance(total_items, int) or total_items < 1 or total_items > 10000:
+            errors.append({
+                "code": "INVALID_TOTAL_ITEMS",
+                "message": "totalItems must be an integer between 1 and 10000",
+                "details": f"Received: {total_items}"
+            })
+        else:
+            validated_limits['totalItems'] = total_items
+        
+        # Items per source limit
+        items_per_source = limits.get('itemsPerSource')
+        if items_per_source is not None:
+            if not isinstance(items_per_source, int) or items_per_source < 1:
+                errors.append({
+                    "code": "INVALID_ITEMS_PER_SOURCE",
+                    "message": "itemsPerSource must be a positive integer",
+                    "details": f"Received: {items_per_source}"
+                })
+            else:
+                validated_limits['itemsPerSource'] = items_per_source
+        
+        # Comments per post limit
+        comments_per_post = limits.get('commentsPerPost', 20)
+        if not isinstance(comments_per_post, int) or comments_per_post < 0 or comments_per_post > 100:
+            errors.append({
+                "code": "INVALID_COMMENTS_PER_POST",
+                "message": "commentsPerPost must be an integer between 0 and 100",
+                "details": f"Received: {comments_per_post}"
+            })
+        else:
+            validated_limits['commentsPerPost'] = comments_per_post
+        
+        # Add warnings for potentially problematic configurations
+        if total_items > 1000 and 'comments' in validated_content.get('include', []):
+            warnings.append(ValidationWarning(
+                "LARGE_REQUEST_WITH_COMMENTS",
+                "Large requests with comments may be slow",
+                "Consider using async delivery mode or reducing totalItems"
+            ))
+        
+        # Warn about inefficient comment limits
+        if comments_per_post > 50 and 'comments' in validated_content.get('include', []):
+            warnings.append(ValidationWarning(
+                "HIGH_COMMENTS_PER_POST",
+                f"High commentsPerPost ({comments_per_post}) may slow down processing",
+                "Consider reducing commentsPerPost for better performance"
+            ))
+        
+        validated_content["limits"] = validated_limits
+        return validated_content
+    
+    @staticmethod
+    def _validate_output_section(output_params: Dict[str, Any], errors: List[Dict]) -> Dict[str, Any]:
+        """Validate output section parameters"""
+        validated_output = {
+            "format": "json",
+            "delivery": {
+                "mode": "sync"
+            }
+        }
+        
+        # Validate format
+        output_format = output_params.get('format', 'json')
+        if output_format not in YARSValidator.VALID_OUTPUT_FORMATS:
+            errors.append({
+                "code": "INVALID_OUTPUT_FORMAT",
+                "message": f"Invalid output format: {output_format}",
+                "details": f"Valid options: {', '.join(YARSValidator.VALID_OUTPUT_FORMATS)}"
+            })
+        else:
+            validated_output["format"] = output_format
+        
+        # Validate delivery
+        delivery = output_params.get('delivery', {})
+        validated_delivery = {}
+        
+        # Delivery mode
+        mode = delivery.get('mode', 'sync')
+        if mode not in YARSValidator.VALID_DELIVERY_MODES:
+            errors.append({
+                "code": "INVALID_DELIVERY_MODE",
+                "message": f"Invalid delivery mode: {mode}",
+                "details": f"Valid options: {', '.join(YARSValidator.VALID_DELIVERY_MODES)}"
+            })
+        else:
+            validated_delivery['mode'] = mode
+        
+        # Webhook URL (required for async mode)
+        webhook_url = delivery.get('webhookUrl')
+        if mode == 'async':
+            if not webhook_url:
+                errors.append({
+                    "code": "MISSING_WEBHOOK_URL",
+                    "message": "webhookUrl is required for async delivery mode",
+                    "details": "Provide a valid HTTP/HTTPS URL to receive results"
+                })
+            elif not isinstance(webhook_url, str) or not webhook_url.startswith(('http://', 'https://')):
+                errors.append({
+                    "code": "INVALID_WEBHOOK_URL",
+                    "message": "webhookUrl must be a valid HTTP/HTTPS URL",
+                    "details": f"Received: {webhook_url}"
+                })
+            else:
+                validated_delivery['webhookUrl'] = webhook_url
+        elif webhook_url:
+            # Webhook provided but mode is sync - auto-switch to async
+            validated_delivery['mode'] = 'async'
+            if isinstance(webhook_url, str) and webhook_url.startswith(('http://', 'https://')):
+                validated_delivery['webhookUrl'] = webhook_url
+            else:
+                errors.append({
+                    "code": "INVALID_WEBHOOK_URL",
+                    "message": "webhookUrl must be a valid HTTP/HTTPS URL",
+                    "details": f"Received: {webhook_url}"
+                })
+        
+        validated_output["delivery"] = validated_delivery
+        return validated_output
+    
+    @staticmethod
+    def _validate_cross_section_rules(params: Dict[str, Any], errors: List[Dict], warnings: List[ValidationWarning]):
+        """Validate rules that span multiple sections"""
+        
+        # Extract key parameters
+        total_items = params.get('content', {}).get('limits', {}).get('totalItems', 100)
+        delivery_mode = params.get('output', {}).get('delivery', {}).get('mode', 'sync')
+        output_format = params.get('output', {}).get('format', 'json')
+        sources = params.get('input', {}).get('sources', [])
+        items_per_source = params.get('content', {}).get('limits', {}).get('itemsPerSource')
+        content_include = params.get('content', {}).get('include', [])
+        
+        # Check for sync mode with large requests
+        if delivery_mode == 'sync' and total_items > 1000:
+            warnings.append(ValidationWarning(
+                "LARGE_SYNC_REQUEST",
+                f"Sync mode with {total_items} items may timeout",
+                "Consider using async delivery mode for large requests"
+            ))
+        
+        # Check for multiple sources without per-source limits
+        if len(sources) > 1 and not items_per_source:
+            warnings.append(ValidationWarning(
+                "MULTIPLE_SOURCES_NO_LIMIT",
+                f"Multiple sources ({len(sources)}) without itemsPerSource limit",
+                "Items will be distributed based on source activity"
+            ))
     
     @staticmethod
     def _is_valid_reddit_url(url: str) -> bool:
@@ -251,20 +472,32 @@ class YARSValidator:
         return False
     
     @staticmethod
-    def create_error_response(errors: List[Dict[str, str]], request_params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Create standardized error response"""
-        return {
+    def create_error_response(errors: List[Dict], warnings: List[ValidationWarning] = None, request_context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Create standardized error response with enhanced messaging"""
+        
+        # Enhance errors with detailed context and suggestions
+        try:
+            enhanced_errors = ErrorEnhancer.enhance_error_list(errors, request_context)
+        except:
+            # Fallback if ErrorEnhancer fails
+            enhanced_errors = errors
+        
+        response = {
             "success": False,
             "data": None,
             "metadata": {
-                "requestParams": request_params or {},
-                "scrapedAt": datetime.utcnow().isoformat() + "Z"
+                "validatedAt": datetime.utcnow().isoformat() + "Z",
+                "errorCount": len(enhanced_errors),
+                "warningCount": len(warnings or [])
             },
-            "errors": errors
+            "errors": enhanced_errors,
+            "warnings": [{"code": w.code, "message": w.message, "suggestion": w.suggestion} for w in (warnings or [])]
         }
+        
+        return response
     
     @staticmethod
-    def create_success_response(data: Dict[str, Any], request_params: Dict[str, Any], execution_time: float) -> Dict[str, Any]:
+    def create_success_response(data: Dict[str, Any], request_params: Dict[str, Any], execution_time: float, warnings: List[ValidationWarning] = None) -> Dict[str, Any]:
         """Create standardized success response"""
         total_items = sum(len(v) if isinstance(v, list) else 0 for v in data.values())
         
@@ -278,5 +511,6 @@ class YARSValidator:
                 "scrapedAt": datetime.utcnow().isoformat() + "Z",
                 "executionTime": f"{execution_time:.2f}s"
             },
+            "warnings": [{"code": w.code, "message": w.message, "suggestion": w.suggestion} for w in (warnings or [])],
             "errors": []
         }

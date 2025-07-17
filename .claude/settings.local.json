@@ -3,7 +3,11 @@
     "allow": [
       "Bash(cd:*)",
       "Bash(cd:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(rm:*)",
+      "Bash(find:*)",
+      "Bash(python:*)",
+      "Bash(curl:*)"
     ],
     "deny": []
   }
